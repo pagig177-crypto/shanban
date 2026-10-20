@@ -2512,7 +2512,7 @@ def render_basic() -> None:
     # ---- PDF 压缩 ----
     with tab_compress:
         with card("compress"):
-            files = pdf_uploader("上传需要压缩的 PDF", "basic_compress_upload")
+            files = pdf_uploader("上传需要压缩的 PDF", "basic_compress_upload", multiple=True)
             mode = st.radio(
                 "压缩模式",
                 list(COMPRESS_LEVELS),
@@ -2529,16 +2529,41 @@ def render_basic() -> None:
                 if not files:
                     st.warning("请先上传一个 PDF 文件。")
                 else:
-                    file = files[0]
-
                     def _do_compress() -> None:
-                        with st.spinner("正在无损压缩…"):
-                            outcome = compress_one(
-                                file.getvalue(),
-                                file.name,
-                                aggressive=COMPRESS_LEVELS[mode],
-                            )
-                        show_result(outcome, "basic_compress")
+                        outcomes = []
+                        for file in files:
+                            with st.spinner(f"正在无损压缩… ({file.name})"):
+                                outcome = compress_one(
+                                    file.getvalue(),
+                                    file.name,
+                                    aggressive=COMPRESS_LEVELS[mode],
+                                )
+                                outcomes.append(outcome)
+                        
+                        # 如果只有一个文件，直接显示结果
+                        if len(outcomes) == 1:
+                            show_result(outcomes[0], "basic_compress")
+                        else:
+                            # 如果有多个文件，打包成 ZIP
+                            payouts = []
+                            for outcome in outcomes:
+                                if outcome.data is not None:
+                                    payouts.append((outcome.filename, outcome.data))
+                            
+                            if payouts:
+                                zip_bytes = _zip_bytes(payouts)
+                                st.success(f"批量压缩完成，共 {len(payouts)} 个文件")
+                                st.download_button(
+                                    "📥 下载全部压缩结果（ZIP）",
+                                    data=zip_bytes,
+                                    file_name="PDF压缩结果.zip",
+                                    mime="application/zip",
+                                    type="primary",
+                                    key="download_zip_compress",
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.warning("没有成功压缩的文件。")
 
                     run_quota_task("compress", _do_compress)
 
@@ -2668,8 +2693,9 @@ def render_basic() -> None:
                 DOC_TO_PDF_TYPES,
                 help_text=DOC_TO_PDF_HELP,
                 dragzone_tip=DRAGZONE_TIP_DOC,
+                multiple=True,
             )
-            st.caption(DOC_TO_PDF_HELP + "；一次转换一份，输出标准 A4 PDF。")
+            st.caption(DOC_TO_PDF_HELP + "；一次转换一份，输出标准 A4 PDF。支持批量处理，结果自动打包为 ZIP。")
             if st.button(
                 "转换为 PDF",
                 type="primary",
@@ -2680,15 +2706,42 @@ def render_basic() -> None:
                 if not files:
                     st.warning("请先上传一个 Word、Excel 或图片文件。")
                 else:
-                    file = files[0]
-
                     def _do_to_pdf() -> None:
-                        size_mb = len(file.getvalue()) / 1024 / 1024
-                        with st.spinner("正在排版并生成 PDF…"):
-                            outcome = document_to_pdf(file.getvalue(), file.name)
-                        if outcome.ok:
-                            outcome.message = f"{outcome.message}（源文件 {size_mb:.1f}MB）"
-                        show_result(outcome, "basic_to_pdf")
+                        outcomes = []
+                        for file in files:
+                            size_mb = len(file.getvalue()) / 1024 / 1024
+                            with st.spinner(f"正在排版并生成 PDF… ({file.name})"):
+                                outcome = document_to_pdf(file.getvalue(), file.name)
+                            if outcome.ok:
+                                outcome.message = f"{outcome.message}（源文件 {size_mb:.1f}MB）"
+                            outcomes.append(outcome)
+                        
+                        # 如果只有一个文件，直接显示结果
+                        if len(outcomes) == 1:
+                            show_result(outcomes[0], "basic_to_pdf")
+                        else:
+                            # 如果有多个文件，打包成 ZIP
+                            payouts = []
+                            for outcome in outcomes:
+                                if outcome.data is not None:
+                                    payouts.append((outcome.filename, outcome.data))
+                            
+                            if payouts:
+                                zip_bytes = _zip_bytes(payouts)
+                                st.success(f"批量转换完成，共 {len(payouts)} 个文件")
+                                st.download_button(
+                                    "📥 下载全部转换结果（ZIP）",
+                                    data=zip_bytes,
+                                    file_name="文档转PDF结果.zip",
+                                    mime="application/zip",
+                                    type="primary",
+                                    key="download_zip_to_pdf",
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.warning("没有成功转换的文件。")
+
+                    run_quota_task("to_pdf", _do_to_pdf)
 
                     run_quota_task("to_pdf", _do_to_pdf)
 
