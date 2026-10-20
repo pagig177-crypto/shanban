@@ -3743,8 +3743,12 @@ def main() -> None:
         code = st.text_input("请输入内测邀请码", placeholder="请输入您的 VIP / PRO 专属内测码", key="invite_input")
         if st.button("进入", key="invite_btn", use_container_width=True):
             normalized = (code or "").strip().upper()
-            if normalized in VALID_CODES:
+            # 邀请码与 Pro 兑换码都算有效入口：拿着 Pro 码的人也必须能进来
+            if normalized in VALID_CODES or normalized in PRO_CODES:
                 st.session_state[VERIFY_KEY] = True
+                # 用 Pro 码进入时直接解锁 Pro 额度，不用再去侧边栏输一次
+                if normalized in PRO_CODES:
+                    st.session_state[PRO_CODE_KEY] = normalized
                 st.rerun()
             else:
                 st.error("邀请码无效，请前往闲鱼/小红书私信获取")
