@@ -1,0 +1,13 @@
+# 闪办 (SwiftDone) Streamlit 配置
+# 上传额度分三层，职责不同，不要混为一谈：
+#   1) server.maxUploadSize（本文件）= 网络层硬天花板，也是唯一的服务端上限
+#      （starlette_routes.py 按它拒绝超大请求体）→ 必须保持 Pro 上限 100MB，
+#      否则兑换码用户根本无法把 100MB 的文件传上来；
+#   2) 前端显示：st.file_uploader(max_upload_size=20) 覆盖组件内那行
+#      “100MB per file” 文案（见 app.py 的 UPLOADER_WIDGET_MAX_MB），
+#      普通用户看到的永远是 20MB，不影响 Pro 用户（业务层按 100MB 放行）；
+#   3) 业务拦截：split_files() 严格校验 单文件 ≤ 20MB / 单次 ≤ 3 份
+#      （Pro：100MB / 20 份），超限时红字提示且不执行任何处理。
+# 调整额度时改本文件 + app.py 顶部的 BASE_* / PRO_* 常量。
+[server]
+maxUploadSize = 100
