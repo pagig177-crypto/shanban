@@ -151,35 +151,897 @@ FONT_LINKS = """
 
 CUSTOM_CSS = """
 <style>
-/* 隐藏顶部多余的按钮 */
-#MainMenu {visibility: hidden;}
-header {visibility: hidden;}
-footer {visibility: hidden;}
-
-/* 移动端强制单排滑动，干掉换行 */
+/* ============================================================
+   0. 设计变量
+   ============================================================ */
+:root {
+    --zjb-bg: #F9FAFB;
+    --zjb-surface: #FFFFFF;
+    --zjb-navy: #0B2447;
+    --zjb-navy-hover: #123A72;
+    --zjb-accent: #2563EB;
+    --zjb-accent-soft: #EFF5FF;
+    --zjb-border: #E4E8EF;
+    --zjb-text: #111827;
+    --zjb-muted: #6B7280;
+    --zjb-faint: #9CA3AF;
+    --zjb-radius: 16px;
+    --zjb-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
+    --zjb-shadow-lift: 0 2px 4px rgba(16, 24, 40, .05), 0 16px 36px rgba(16, 24, 40, .09);
+}
+/* ============================================================
+    0.5 移动端适配：768px 以下不换行横向滑动导航栏、压缩顶部留白
+   ============================================================ */
 @media (max-width: 768px) {
-    .block-container { padding: 1rem 0.5rem !important; }
-    /* 强制所有 Tabs 容器横向滚动 */
-    div[data-baseweb="tab-list"] {
+    /* ── 导航栏横向滑动（不换行、可滑动、无滚动条） ── */
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {
         display: flex !important;
         flex-wrap: nowrap !important;
         overflow-x: auto !important;
-        scrollbar-width: none; /* 隐藏 Firefox 滚动条 */
-        -ms-overflow-style: none; /* 隐藏 IE 滚动条 */
+        white-space: nowrap !important;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;           /* Firefox */
+        -ms-overflow-style: none;        /* IE / Edge */
+        padding-bottom: 0px !important;
+        gap: 10px !important;
     }
-    div[data-baseweb="tab-list"]::-webkit-scrollbar {
-        display: none !important; /* 隐藏 Chrome/Safari 滚动条 */
+    [data-testid="stTabs"] [data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none !important;
     }
-    button[data-baseweb="tab"] {
+
+    /* Tab 按钮不收缩，固定最小宽度保证可滑 */
+    [data-testid="stTabs"] button[data-baseweb="tab"] {
         flex-shrink: 0 !important;
-        padding: 8px 12px !important;
+        white-space: nowrap !important;
+        padding: 5px 10px !important;
     }
-    /* 紧凑排版 */
-    h1 { font-size: 1.5rem !important; margin: 5px 0 !important; }
-    h2 { font-size: 1.2rem !important; margin: 5px 0 !important; }
-    h3 { font-size: 1rem !important; margin: 5px 0 !important; }
-    p { font-size: 0.9rem !important; margin-bottom: 5px !important; }
+
+    /* 全局缩小边距，内容更紧凑 */
+    .block-container,
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    /* 缩小标题字号 + 间距 */
+    h1 { font-size: 1.5rem !important; margin-bottom: 0.5rem !important; }
+    h2 { font-size: 1.2rem !important; margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
+    h3 { font-size: 1rem !important; margin-bottom: 0.5rem !important; }
+
+    /* 正文缩小 */
+    p { font-size: 0.9rem !important; margin-bottom: 0.5rem !important; }
+
+    /* Hero 区收紧上下内边距，让上传按钮早一点露出来 */
+    .zjb-hero {
+        padding-top: 0.6rem !important;
+        padding-bottom: 0.8rem !important;
+    }
+
+    /* 品牌名字号缩小 */
+    .zjb-hero .zjb-name {
+        font-size: clamp(28px, 8vw, 32px) !important;
+    }
+
+    /* 主 Slogan 缩小 */
+    .zjb-hero .zjb-slogan {
+        font-size: 16px !important;
+        margin-top: 8px !important;
+    }
+
+    /* 副标题缩小 */
+    .zjb-hero .zjb-tagline {
+        font-size: 12px !important;
+        margin-top: 4px !important;
+    }
+
+    /* 信任标签胶囊缩小 */
+    .zjb-hero .zjb-badge {
+        margin-bottom: 18px !important;
+        font-size: 11px !important;
+        padding: 5px 10px !important;
+    }
+
+    /* 闪电 SVG 图标缩小 */
+    .zjb-hero .zjb-mark {
+        width: 32px !important;
+        height: 32px !important;
+    }
 }
+
+/* ============================================================
+   1. 全局：背景、居中容器、隐藏原生 Header / 菜单 / 页脚
+   ============================================================ */
+html, body, .stApp, .stMarkdown, button, input, textarea {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+.stApp {background: var(--zjb-bg); color: var(--zjb-text);}
+
+/* 顶部原生 Header 完全隐藏（菜单、Deploy、工具栏、装饰条） */
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+#MainMenu, footer {display: none !important;}
+
+/* 页面内容：最大 900px 并水平居中，两侧自动留白。
+   顶部 80px：原生 Header 是 position:fixed 的覆盖层，不出现在文档流里，
+   所以这 80px 是纯视觉留白，保证胶囊标签完整可见、不被顶栏压住。 */
+.block-container,
+[data-testid="stMainBlockContainer"] {
+    max-width: 900px !important;
+    width: 100% !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    padding: 80px 1.5rem 4rem 1.5rem !important;
+}
+
+/* 兜底：万一 Streamlit 版本把 header 换成占位块，也压掉它的高度 */
+header[data-testid="stHeader"] {
+    height: 0 !important;
+    min-height: 0 !important;
+    background: transparent !important;
+}
+
+/* 竖排区块统一节奏 */
+[data-testid="stVerticalBlock"] {gap: .85rem;}
+
+/* ============================================================
+   2. Hero 区：胶囊信任标签 + 品牌名 + Slogan + 副标题
+   ------------------------------------------------------------
+   间距节奏（从上到下，官方规格值）：
+     标签 ──margin-top: 32px──> Logo ──margin-top: 24px──> Slogan ──margin-top: 12px──> 副标题
+     → 间距逐级递减（32 → 24 → 12），视线自然从上往下收，
+       这是排版里最经典的「漏斗式留白」，比等距更有呼吸感。
+   窄屏处理：px 值在手机上会显得过大，用 clamp() 给下限，
+   保证 320px 宽也放得下，桌面端严格等于规格值。
+   ============================================================ */
+.zjb-hero {
+    --hero-ink: #0f172a;          /* 品牌名：深藏青/近黑，最重 */
+    --hero-strong: #334155;       /* Slogan：深灰 */
+    --hero-sub: #94a3b8;          /* 副标题：浅灰，最弱 */
+    --hero-badge-bg: #f4f4f5;     /* 胶囊背景：极浅灰 */
+    --hero-badge-fg: #71717a;     /* 胶囊文字：中灰 */
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    /* 上下留白给足，让首屏不贴边 */
+    padding: clamp(2rem, 5vw, 3rem) 0 clamp(3rem, 6vw, 4rem) 0;
+}
+
+/* 入场动画：只动 opacity / transform，走合成层，不引起重排 */
+@keyframes zjb-fade-up {
+    from {opacity: 0; transform: translate3d(0, 12px, 0);}
+    to   {opacity: 1; transform: translate3d(0, 0, 0);}
+}
+
+/* Hero 内所有段落统一清零默认边距——间距一律由各自 margin-top 显式控制，
+   避免 Streamlit / 浏览器默认样式叠加导致「凑在一起」。
+   注意：这里只清零 block-start，否则会把下面各元素自己的 margin-top 也抹掉 */
+.zjb-hero p {
+    margin-block-start: 0;
+    margin-block-end: 0;
+    line-height: 1.5;
+}
+
+/* ---------- 1) 信任标签：真正的胶囊 ---------- */
+.zjb-hero .zjb-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 40px 0;                   /* 规格：与下方 Logo 留 40px */
+    padding: 8px 16px;                    /* 规格：8px 16px */
+    border: 1px solid rgba(24, 24, 27, .06);
+    border-radius: 999px;                 /* 完整胶囊 */
+    background: var(--hero-badge-bg);
+    color: var(--hero-badge-fg) !important;   /* 规格：#71717a */
+    font-size: 14px;                      /* 规格：14px */
+    font-weight: 500;
+    line-height: 20px;
+    letter-spacing: .01em;
+    white-space: nowrap;
+    align-self: center;
+    animation: zjb-fade-up .6s cubic-bezier(.22, .61, .36, 1) both;
+}
+
+/* 绿点：用元素画圆而非 ● 字符（● 在不同系统字宽不一致，容易歪） */
+.zjb-hero .zjb-badge .dot {
+    width: 7px; height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, .14);
+}
+
+/* ---------- 2) 品牌名：整页视觉核心 ---------- */
+/* 注意：Streamlit 会把 <h1> 的子内容再包一层 <span>（st-emotion-cache-0，display:block），
+   所以 flex 必须作用在「直接包住图标与文字的那个元素」上，否则 row 只会对 wrapper 生效，
+   图标与文字会在 wrapper 内部按 block 上下堆叠。
+   这里的 > span:not([data-testid]) 精确命中内容 wrapper，同时排除 Streamlit 注入的
+   操作区 <span data-testid="stHeaderActionElements">。 */
+.zjb-hero .zjb-name,
+.zjb-hero .zjb-name > span:not([data-testid]) {
+    display: flex;
+    flex-direction: row;
+    align-items: center;                  /* 图标与文字垂直居中对齐 */
+    justify-content: center;
+    gap: 12px;
+}
+
+.zjb-hero .zjb-name {
+    /* 上方间距由胶囊的 margin-bottom: 40px 提供，这里清零避免叠加成 72px */
+    margin: 0;
+    padding: 0;
+    color: var(--hero-ink) !important;        /* 规格：#0f172a */
+    font-size: clamp(48px, 8.6vw, 64px);      /* 规格：64px，窄屏降到 48px */
+    font-weight: 800;                         /* 规格：800 */
+    line-height: 1.1;
+    letter-spacing: -.02em;                   /* 大字号收紧字距，避免松散 */
+    position: relative;                       /* 给 Streamlit 的操作区做定位基准 */
+    animation: zjb-fade-up .6s cubic-bezier(.22, .61, .36, 1) .08s both;
+}
+
+/* Streamlit 会给每个标题注入一个隐藏操作区（16×16），让它脱离 flex 流，
+   否则它会作为一个 flex item 占位、把「图标+文字」整体推向左侧 */
+.zjb-hero .zjb-name > [data-testid="stHeaderActionElements"] {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: none;                            /* 无锚点/复制按钮时本就不需要 */
+}
+
+/* 文字部分：锁死行内排版，避免被 Streamlit 的段落样式干扰 */
+.zjb-hero .zjb-name .zjb-word {
+    display: inline-block;
+    color: inherit !important;
+    white-space: nowrap;
+}
+
+/* 闪电图标：Lucide Zap 造型（实心多边形 + 圆角连接），尺寸固定 52px */
+.zjb-hero .zjb-mark {
+    width: 52px;
+    height: 52px;
+    flex: 0 0 auto;
+    display: block;
+    color: #f59e0b;
+    /* 克制的发光：紧贴边缘的 8px 柔光，不做大面积模糊 */
+    filter: drop-shadow(0 0 8px rgba(245, 158, 11, .4));
+}
+
+/* ---------- 3) 主 Slogan ---------- */
+.zjb-hero .zjb-slogan {
+    margin: clamp(18px, 4vw, 24px) 0 0 0;     /* 规格：mt-24px */
+    color: var(--hero-strong) !important;      /* 规格：#334155 */
+    font-size: clamp(20px, 4.4vw, 24px);       /* 规格：24px */
+    font-weight: 500;                          /* 规格：500 */
+    line-height: 1.45;
+    letter-spacing: 1px;                       /* 规格：1px，更舒展 */
+    animation: zjb-fade-up .6s cubic-bezier(.22, .61, .36, 1) .16s both;
+}
+
+/* ---------- 4) 副标题 ---------- */
+.zjb-hero .zjb-tagline {
+    margin: 12px 0 0 0;                        /* 规格：mt-12px */
+    color: var(--hero-sub) !important;         /* 规格：#94a3b8 */
+    font-size: 15px;                           /* 规格：15px */
+    font-weight: 400;                          /* 规格：400 */
+    line-height: 1.6;
+    letter-spacing: .01em;
+    animation: zjb-fade-up .6s cubic-bezier(.22, .61, .36, 1) .24s both;
+}
+
+/* 尊重系统「减少动态效果」：关掉所有动画，直接显示最终状态 */
+@media (prefers-reduced-motion: reduce) {
+    .zjb-hero .zjb-badge,
+    .zjb-hero .zjb-name,
+    .zjb-hero .zjb-slogan,
+    .zjb-hero .zjb-tagline,
+    .zjb-hero .zjb-mark {
+        animation: none !important;
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* ============================================================
+   3. Tab 标签栏：居中 + 选中项深蓝下划线
+   ============================================================ */
+/* 当前 DOM：div[role="tablist"] > div[data-testid="stTab"]
+   旧版本：button[data-baseweb="tab"] —— 两套选择器都写上，避免版本差异 */
+[data-testid="stTabs"] {width: 100%;}
+
+[data-testid="stTabs"] [role="tablist"],
+.stTabs [data-baseweb="tab-list"] {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    gap: .3rem !important;
+    padding: 0 !important;
+    border-bottom: 1px solid var(--zjb-border) !important;
+    background: transparent !important;
+}
+
+/* 单个标签：灰字、无底色、2px 透明底线预占位，避免选中时跳动 */
+[data-testid="stTabs"] [data-testid="stTab"],
+.stTabs button[data-baseweb="tab"] {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 3.1rem !important;
+    padding: 0 1.05rem !important;
+    /* 悬停/点击后的底色统一为全透明，只靠文字颜色表达状态 */
+    background: transparent !important;
+    border: 0 !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    color: var(--zjb-muted) !important;
+    font-size: .95rem !important;
+    font-weight: 500 !important;
+    letter-spacing: .01em;
+    cursor: pointer;
+    user-select: none;
+    transition: color .18s ease, border-color .18s ease;
+}
+[data-testid="stTabs"] [data-testid="stTab"] p,
+.stTabs button[data-baseweb="tab"] p {
+    font-size: .95rem !important;
+    font-weight: 500 !important;
+    color: inherit !important;
+    white-space: nowrap;
+    margin: 0 !important;
+}
+/* 悬停、键盘聚焦、点击后（react-aria 会保留 data-hovered / data-focused）都保持无底色；
+   用 !important + 高特异性同时压住组件内置的 &[data-hovered] 规则 */
+[data-testid="stTabs"] [data-testid="stTab"]:hover,
+[data-testid="stTabs"] [data-testid="stTab"][data-hovered],
+[data-testid="stTabs"] [data-testid="stTab"][data-focused],
+[data-testid="stTabs"] [data-testid="stTab"][data-hovered][data-selected],
+[data-testid="stTabs"] [data-testid="stTab"][data-focused][data-selected],
+.stTabs button[data-baseweb="tab"]:hover,
+.stTabs button[data-baseweb="tab"][aria-selected="true"]:hover {
+    color: var(--zjb-navy) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+[data-testid="stTabs"] [data-testid="stTab"]:focus,
+[data-testid="stTabs"] [data-testid="stTab"]:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* 选中态：深蓝文字 + 深蓝下划线 */
+[data-testid="stTabs"] [data-testid="stTab"][aria-selected="true"],
+.stTabs button[data-baseweb="tab"][aria-selected="true"] {
+    color: var(--zjb-navy) !important;
+    background: transparent !important;
+    border-bottom: 2px solid var(--zjb-navy) !important;
+}
+[data-testid="stTabs"] [data-testid="stTab"][aria-selected="true"] p,
+.stTabs button[data-baseweb="tab"][aria-selected="true"] p {
+    color: var(--zjb-navy) !important;
+    font-weight: 700 !important;
+}
+/* 去掉内置滑动高亮条，我们用自己的下划线 */
+.react-aria-SelectionIndicator,
+[data-testid="stTabs"] .react-aria-SelectionIndicator,
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] {display: none !important;}
+
+/* 内容面板与标签栏的间距 */
+[data-testid="stTabs"] [data-testid="stTabPanel"] {padding: 1.4rem 0 0 0 !important;}
+
+
+/* ============================================================
+   4. 卡片容器：白底 + 浅边框 + 圆角 + 轻阴影
+   ============================================================ */
+[class*="st-key-card-"] {
+    background: var(--zjb-surface) !important;
+    border: 1px solid var(--zjb-border) !important;
+    border-radius: var(--zjb-radius) !important;
+    box-shadow: var(--zjb-shadow);
+    padding: 1.6rem 1.7rem 1.5rem 1.7rem !important;
+    margin-bottom: 1.15rem;
+    transition: box-shadow .2s ease, border-color .2s ease;
+}
+[class*="st-key-card-"]:hover {
+    box-shadow: var(--zjb-shadow-lift);
+    border-color: #D8DEEA !important;
+}
+[class*="st-key-card-"] [data-testid="stVerticalBlock"] {gap: .7rem;}
+
+/* 卡片内的分栏在窄屏自动堆叠 */
+@media (max-width: 640px) {
+    /* Hero 区的字号/间距已全部由 clamp() 自适应，这里不再重复覆盖 */
+    /* PDF基础处理有 4 个二级标签，窄屏收紧内边距，避免换行过密 */
+    [data-testid="stTabs"] [data-testid="stTab"] {padding: 0 .62rem !important;}
+    [data-testid="stTabs"] [data-testid="stTab"] p {font-size: .86rem !important;}
+}
+
+/* ============================================================
+   5. 魔法上传框：白底 + 浅蓝虚线 + 悬停微蓝 + 拖拽高亮
+   ============================================================ */
+/* 外层容器：去掉多余边距，让它撑满卡片 */
+[data-testid="stFileUploader"] {width: 100%;}
+[data-testid="stFileUploader"] > section,
+[data-testid="stFileUploaderDropzone"] {
+    background: #FFFFFF !important;
+    border: 1.5px dashed #B6CBE8 !important;      /* 浅蓝虚线 */
+    border-radius: 14px !important;
+    padding: 2.1rem 1.4rem !important;           /* 更大的呼吸感 */
+    min-height: 164px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: .75rem !important;
+    cursor: pointer;
+    transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+[data-testid="stFileUploaderDropzone"]:hover {
+    background: #F7FAFF !important;              /* 悬停微蓝 */
+    border-color: #6E9BE0 !important;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, .06);
+}
+/* 拖拽文件经过时：实一点的高亮 */
+[data-testid="stFileUploaderDropzone"]:focus-within {
+    border-color: var(--zjb-accent) !important;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, .10);
+}
+/* 上传框内的说明文字 */
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span,
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    color: var(--zjb-muted) !important;
+    font-size: .84rem !important;
+    text-align: center;
+}
+/* ------------------------------------------------------------------
+   拖拽区文案：隐藏前端硬编码的 “200MB per file”
+   Streamlit 这句是前端硬编码的 `${size} per file • ${类型}`（参数改不了），
+   这里把 “数值 + per file” 视觉隐藏，再用 ::after 补文案；
+   ::after 的 content 由 _apply_dragzone_tip() 按当前页面动态注入
+   （各页支持格式不同，不能在本文件里写死，否则 Excel 上传框会显示成 PDF）。
+   真正生效的限制另有 server.maxUploadSize=100（见 .streamlit/config.toml）
+   与后端 split_files() 校验（普通用户 20MB / 3 份，兑换码用户 100MB / 20 份）。
+   ------------------------------------------------------------------ */
+[data-testid="stFileUploaderDropzoneInstructions"] span > span:first-child {
+    font-size: 0 !important;      /* 隐藏原本的 “200MB per file” */
+    letter-spacing: -1em;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] span > span:first-child::after {
+    content: var(--zjb-dragzone-tip, "支持格式：PDF/JPG/PNG，单文件最大 20MB。");
+    font-size: .84rem !important;
+    letter-spacing: normal;
+    color: var(--zjb-muted);
+}
+/* 万一内置结构变化，兜底：整块说明区不出现 per file 英文 */
+[data-testid="stFileUploaderDropzoneInstructions"] {text-align: center;}
+
+/* 上传框内的“Browse files”按钮：淡蓝胶囊 */
+[data-testid="stFileUploaderDropzone"] button,
+[data-testid="stFileUploaderDropzone"] button:hover {
+    background: var(--zjb-accent-soft) !important;
+    color: var(--zjb-accent) !important;
+    border: 1px solid #D3E3FB !important;
+    border-radius: 999px !important;
+    padding: .45rem 1.15rem !important;
+    font-size: .86rem !important;
+    font-weight: 600 !important;
+    box-shadow: none !important;
+}
+[data-testid="stFileUploaderDropzone"] button:hover {
+    background: #E3EDFE !important;
+    border-color: #BFD6F8 !important;
+}
+/* 已上传文件的列表块 */
+[data-testid="stFileUploader"] ul,
+[data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] {
+    background: #FBFCFE !important;
+    border: 1px solid var(--zjb-border) !important;
+    border-radius: 12px !important;
+}
+[data-testid="stFileUploader"] label,
+[data-testid="stWidgetLabel"] p {
+    color: #374151 !important;
+    font-size: .88rem !important;
+    font-weight: 600 !important;
+}
+
+/* ============================================================
+   6. 按钮：圆角矩形、主色、轻阴影、悬停抬起 + 变色
+   ============================================================ */
+.stButton > button,
+.stDownloadButton > button,
+[data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-primary"] {
+    border-radius: 12px !important;
+    font-size: .92rem !important;
+    font-weight: 600 !important;
+    letter-spacing: .01em;
+    padding: .62rem 1.5rem !important;
+    min-height: 2.75rem;
+    transition: transform .16s ease, box-shadow .2s ease,
+                background .2s ease, border-color .2s ease, color .2s ease;
+}
+
+/* 主按钮（type="primary"） */
+.stButton > button[kind="primary"],
+[data-testid="stBaseButton-primary"] {
+    background: var(--zjb-navy) !important;
+    color: #FFFFFF !important;
+    border: 1px solid var(--zjb-navy) !important;
+    box-shadow: 0 1px 2px rgba(11, 36, 71, .18), 0 6px 16px rgba(11, 36, 71, .16);
+}
+.stButton > button[kind="primary"]:hover,
+[data-testid="stBaseButton-primary"]:hover {
+    background: var(--zjb-navy-hover) !important;
+    border-color: var(--zjb-navy-hover) !important;
+    color: #FFFFFF !important;
+    transform: translateY(-1px) scale(1.015);
+    box-shadow: 0 10px 22px rgba(11, 36, 71, .2);
+}
+
+/* ============================================================
+   7. 复选框 / 单选框：整齐居中、深蓝选中
+   ============================================================ */
+[data-testid="stCheckbox"],
+[data-testid="stRadio"] {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    width: 100% !important;
+}
+[data-testid="stCheckbox"] > [data-testid="stRadioGroup"],
+[data-testid="stRadio"] > [data-testid="stRadioGroup"] {width: 100% !important;}
+/* 复选框方框：圆角 + 深蓝选中态（新旧两套 DOM 都覆盖；当前界面未用到 st.checkbox） */
+[data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"],
+[data-testid="stCheckbox"] [data-testid="stCheckboxRootElement"] {
+    border-radius: 6px !important;
+    border-color: #C7D0DD !important;
+}
+[data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"],
+[data-testid="stCheckbox"] [data-selected] [data-testid="stCheckboxRootElement"] {
+    background-color: var(--zjb-navy) !important;
+    border-color: var(--zjb-navy) !important;
+}
+/* 单选项（压缩模式）横向居中排布：新版 DOM 是 [data-testid="stRadioGroup"] > div > label */
+[data-testid="stRadio"] [role="radiogroup"],
+[data-testid="stRadioGroup"] {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    gap: .5rem 1.4rem !important;
+}
+[data-testid="stRadioGroup"] > div {
+    display: flex !important;
+    align-items: center !important;
+    flex: 1 1 auto !important;
+}
+[data-testid="stRadioGroup"] > div > label {max-width: 100%;}
+/* 单选/复选的标题单独占一行，选项组整体居中 */
+[data-testid="stRadio"] > label[data-testid="stWidgetLabel"],
+[data-testid="stCheckbox"] > label[data-testid="stWidgetLabel"] {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 0 .5rem 0 !important;
+}
+[data-testid="stRadioOption"] {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: .55rem !important;
+    cursor: pointer;
+    white-space: nowrap;
+}
+[data-testid="stRadioOption"] p {
+    color: #374151 !important;
+    font-size: .9rem !important;
+    line-height: 1.4 !important;
+    margin: 0 !important;
+}
+[data-testid="stRadioOption"][data-selected] p {color: var(--zjb-navy) !important; font-weight: 600 !important;}
+/* 单选圆环：未选灰色描边，选中深蓝圆环 + 白点 */
+[data-testid="stRadioOption"] div:has(> div) {border-color: #C7D0DD !important;}
+[data-testid="stRadioOption"][data-selected] [class]:has(> div) {
+    background-color: transparent !important;
+    border-color: var(--zjb-navy) !important;
+    border-width: 6px !important;
+}
+[data-testid="stRadioOption"][data-selected] [class]:has(> div) > div {background-color: transparent !important;}
+/* 卡片里的分栏内容垂直居中，避免左右高度不齐 */
+[class*="st-key-card-"] [data-testid="stHorizontalBlock"] {align-items: flex-start;}
+
+/* ============================================================
+   8. 输入框 / 文本域 / 提示文字
+   ============================================================ */
+/* Streamlit 的输入框是“外层 div（画底/边框）+ 内部无样式 input”，
+   两套 DOM（data-baseweb 旧版 / data-testid 新版）都覆盖 */
+.stTextInput [data-baseweb="input"],
+.stTextInput [data-testid="stTextInputRootElement"],
+.stTextArea [data-baseweb="base-input"],
+.stTextArea [data-testid="stTextAreaRootElement"],
+div[data-baseweb="input"],
+div[data-baseweb="base-input"] {
+    background: #FFFFFF !important;
+    border: 1px solid #DCE2EC !important;
+    border-radius: 11px !important;
+    box-shadow: inset 0 1px 1px rgba(16, 24, 40, .02) !important;
+    transition: border-color .18s ease, box-shadow .18s ease;
+    overflow: hidden;
+}
+.stTextInput [data-baseweb="input"]:focus-within,
+.stTextInput [data-testid="stTextInputRootElement"]:focus-within,
+.stTextArea [data-baseweb="base-input"]:focus-within,
+.stTextArea [data-testid="stTextAreaRootElement"]:focus-within {
+    border-color: var(--zjb-accent) !important;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, .10) !important;
+}
+.stTextInput input,
+.stTextArea textarea {
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 11px !important;
+    padding: .72rem .95rem !important;
+    font-size: .93rem !important;
+    color: var(--zjb-text) !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {color: #A7B0BF !important;}
+
+/* 灰字说明（st.caption）：统一小号浅灰 */
+[data-testid="stCaptionContainer"] p,
+.stCaption p {
+    color: var(--zjb-faint) !important;
+    font-size: .8rem !important;
+    line-height: 1.6 !important;
+}
+
+/* 安全承诺小字：居中的浅灰胶囊 */
+.zjb-privacy {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .35rem;
+    margin: .1rem 0 .35rem 0;
+    color: #9AA3B2;
+    font-size: .76rem;
+    line-height: 1.6;
+    text-align: center;
+}
+
+/* ============================================================
+   8.1 改字规则表：浅色底 + 深色字，禁用右上角浮动工具条
+   ============================================================ */
+/* 改字规则区：白底浅框，一行一对输入框，任何时候都是浅色主题 */
+.zjb-rules {
+    background: #FFFFFF;
+    border: 1px solid var(--zjb-border);
+    border-radius: 14px;
+    padding: .9rem 1rem .6rem 1rem;
+    margin: .2rem 0 .5rem 0;
+}
+.zjb-rules [data-testid="stWidgetLabel"] p {
+    color: #4B5563 !important;
+    font-size: .8rem !important;
+    font-weight: 600 !important;
+}
+.zjb-rule-arrow {
+    text-align: center;
+    color: var(--zjb-accent);
+    font-size: 1.05rem;
+    font-weight: 700;
+    line-height: 2.75rem;
+}
+/* 行尾删除按钮：红字 + 透明底，hover 出现浅红底色（图标本身是 🗑️） */
+.zjb-rules [data-testid="stColumn"]:last-child button {
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    color: #DC2626 !important;
+    font-size: 1.05rem !important;
+    padding: .1rem .3rem !important;
+    min-height: 2.4rem;
+    box-shadow: none !important;
+}
+.zjb-rules [data-testid="stColumn"]:last-child button:hover {
+    background: #FEE2E2 !important;
+    border-color: #FECACA !important;
+    color: #B91C1C !important;
+}
+/* “💡 怎么用”：浅蓝底一行说明，比长段落更好扫读 */
+.zjb-howto {
+    background: #F5F9FF;
+    border: 1px solid #DCE9FB;
+    border-radius: 10px;
+    padding: .6rem .85rem;
+    margin: .3rem 0 .1rem 0;
+    color: #41506B;
+    font-size: .86rem;
+    line-height: 1.65;
+}
+.zjb-howto strong { color: var(--zjb-accent); }
+
+/* “＋ 添加一条替换规则”：轻量文字按钮 */
+[data-testid="stButton"] button[kind="tertiary"] {
+    color: var(--zjb-accent) !important;
+    font-weight: 600 !important;
+}
+
+/* 兜底：若后续重新引入 st.data_editor / st.dataframe，
+   统一改成浅色（白底深字），并隐藏右上角浮动工具条（统计 / 搜索 / 全屏 / 下载） */
+[data-testid="stDataFrame"] {
+    background: #FFFFFF !important;
+    border: 1px solid var(--zjb-border) !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+}
+[data-testid="stDataFrame"] [data-testid="stDataFrameGlideDataEditor"],
+[data-testid="stDataFrame"] canvas {
+    background: #FFFFFF !important;
+    color: var(--zjb-text) !important;
+}
+/* 工具条：新版是 stElementToolbar，旧版挂在 element 的 overlay 容器里 */
+[data-testid="stDataFrame"] [data-testid="stElementToolbar"],
+[data-testid="stElementToolbar"],
+[data-testid="stDataFrame"] .gdg-toolbar,
+[data-testid="stDataFrame"] [class*="toolbar"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+[data-testid="stDataFrame"] {padding-right: 0 !important;}
+
+/* ============================================================
+   9. 页面大标题
+   ============================================================ */
+
+/* 页面大标题：极简，无序号标签 */
+.zjb-page-head {
+    margin: .1rem 0 1.1rem 0;
+}
+.zjb-page-head h2 {
+    margin: 0 0 .4rem 0;
+    color: var(--zjb-text);
+    font-size: 1.5rem; font-weight: 700; line-height: 1.35;
+    letter-spacing: .01em;
+}
+.zjb-page-head p {
+    margin: 0;
+    max-width: 46rem;
+    color: var(--zjb-muted); font-size: .92rem; line-height: 1.75;
+}
+
+/* 步骤卡片顶部：标题 + 一句话说明 */
+.zjb-step-head {
+    display: flex; align-items: flex-start; gap: .7rem;
+    margin: 0 0 .55rem 0;
+}
+.zjb-step-head .zjb-step-text {min-width: 0;}
+.zjb-step-head .zjb-step-text strong {
+    display: block; color: var(--zjb-text); font-size: .98rem; font-weight: 700;
+    line-height: 1.5;
+}
+.zjb-step-head .zjb-step-text span {
+    display: block; color: var(--zjb-muted); font-size: .8rem; line-height: 1.6;
+}
+
+/* 提示字号小字：正文级黑灰，保证任何底色上都能看清 */
+.zjb-tip-text {
+    color: #374151;
+    font-size: .86rem;
+    line-height: 1.7;
+    margin: -.35rem 0 .1rem .15rem;
+    font-weight: 400;
+}
+@media (prefers-color-scheme: dark) {
+    .zjb-tip-text {color: #E5E7EB;}
+}
+
+/* 提示框（st.info / st.warning / st.success / st.error）：
+   全局 .stApp 的文字色会漏进组件内部，浅色模式下黄底配浅字「看不清」。
+   这里在浅色模式把警示框文字钉成深色；深色模式保留组件默认的浅色字，避免反过来糊住 */
+@media (prefers-color-scheme: light) {
+    [data-testid="stAlert"],
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] span,
+    [data-testid="stAlert"] div,
+    [data-testid="stAlert"] li,
+    [data-testid="stAlertContainer"],
+    [data-testid="stAlertContainer"] p,
+    [data-testid="stAlertContainer"] span,
+    [data-testid="stAlertContainer"] div {
+        color: #1F2937 !important;
+        font-weight: 500;
+        line-height: 1.7;
+    }
+    [data-testid="stAlert"] a,
+    [data-testid="stAlertContainer"] a {color: #1D4ED8 !important; text-decoration: underline;}
+}
+
+/* 预览图：细边框 + 圆角，避免图片直接“糊”在卡片上 */
+.zjb-preview img {
+    border: 1px solid var(--zjb-border) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 6px 18px rgba(11, 36, 71, .06);
+}
+
+/* 页脚 */
+.zjb-footer {
+    margin-top: 2.4rem; padding-top: 1.6rem;
+    border-top: 1px solid var(--zjb-border);
+    text-align: center;
+    color: var(--zjb-faint); font-size: .78rem; line-height: 1.9;
+}
+.zjb-footer strong {color: #6B7280; font-weight: 600;}
+/* 侧边栏品牌：闪电 + 闪办 + 英文名 */
+.zjb-side-brand {
+    display: flex; align-items: baseline; gap: .4rem;
+    padding: 0 0 .55rem 0; margin-bottom: .55rem;
+    border-bottom: 1px solid var(--zjb-border);
+}
+.zjb-side-brand .mark {font-size: 1.05rem; line-height: 1;}
+.zjb-side-brand .word {
+    color: var(--zjb-navy); font-size: 1.06rem; font-weight: 700; letter-spacing: .08em;
+}
+.zjb-side-brand .alias {
+    color: var(--zjb-faint); font-size: .7rem; letter-spacing: .08em;
+}
+
+/* 页脚品牌行：闪电 + 闪办，比版权行略深一点 */
+.zjb-footer .zjb-footer-brand {
+    display: inline-block; margin-bottom: .15rem;
+    color: #6B7280; font-weight: 600; letter-spacing: .06em;
+}
+
+.stButton > button[kind="primary"]:active,
+[data-testid="stBaseButton-primary"]:active {
+    transform: translateY(0) scale(.995);
+    box-shadow: 0 1px 2px rgba(11, 36, 71, .2);
+}
+.stButton > button[kind="primary"]:focus,
+[data-testid="stBaseButton-primary"]:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, .18) !important;
+}
+
+/* 次要按钮（如上传框里的按钮已单独处理，这里管页面上的普通按钮） */
+.stButton > button:not([kind="primary"]) {
+    background: #FFFFFF !important;
+    color: var(--zjb-navy) !important;
+    border: 1px solid #D5DCE7 !important;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .05);
+}
+.stButton > button:not([kind="primary"]):hover {
+    background: #F4F7FC !important;
+    border-color: #B9C6DA !important;
+    color: var(--zjb-navy) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(16, 24, 40, .08);
+}
+
+/* 下载按钮：深蓝描边胶囊，和主按钮区分但同一家族 */
+.stDownloadButton > button {
+    background: #FFFFFF !important;
+    color: var(--zjb-navy) !important;
+    border: 1.5px solid var(--zjb-navy) !important;
+    box-shadow: 0 1px 2px rgba(11, 36, 71, .08), 0 6px 16px rgba(11, 36, 71, .08);
+}
+.stDownloadButton > button:hover {
+    background: var(--zjb-navy) !important;
+    color: #FFFFFF !important;
+    transform: translateY(-1px) scale(1.015);
+    box-shadow: 0 10px 22px rgba(11, 36, 71, .2);
+}
+
 </style>
 """
 
