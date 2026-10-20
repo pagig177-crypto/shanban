@@ -161,9 +161,9 @@ VERIFY_KEY = "verified"
 
 COMPRESS_LEVELS = {
     "无损压缩（推荐，画质与版式不变）": False,
-    "极致压缩（目标 < 1MB，仅压缩照片）": True,
+    "极致压缩（目标 < 10MB，仅压缩照片）": True,
 }
-COMPRESS_TARGET = "1MB"
+COMPRESS_TARGET = "10MB"
 
 MERGE_HELP = "可一次选择多份，按上传顺序合并"
 
@@ -734,8 +734,12 @@ header[data-testid="stHeader"] {
 }
 [data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"],
 [data-testid="stCheckbox"] [data-selected] [data-testid="stCheckboxRootElement"] {
-    background-color: var(--zjb-navy) !important;
-    border-color: var(--zjb-navy) !important;
+    background-color: #10B981 !important;  /* 绿色 */
+    border-color: #10B981 !important;
+}
+[data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"] svg,
+[data-testid="stCheckbox"] [data-selected] [data-testid="stCheckboxRootElement"] svg {
+    color: white !important;
 }
 /* 单选项（压缩模式）横向居中排布：新版 DOM 是 [data-testid="stRadioGroup"] > div > label */
 [data-testid="stRadio"] [role="radiogroup"],
@@ -1084,6 +1088,9 @@ class Outcome:
     filename: str = ""
     mime: str = ""
     log: list[str] | None = None
+    # 拆分这类「一份变多份」的产物：把明细逐个带在这里，上层可以直接摊平打包，
+    # 不必再解开已经拼好的 ZIP（避免 ZIP 套 ZIP）。
+    files: list[tuple[str, bytes]] | None = None
 
 
 def display_name(raw: str | None, fallback: str = "文件") -> str:
@@ -2307,6 +2314,69 @@ def show_result(outcome: Outcome, key: str) -> None:
             st.code("\n".join(outcome.log), language="text")
 
 
+def finish_batch(outcomes: list[Outcome], key: str, zip_name: str, *, noun: str = "处理") -> None:
+    """批量任务的统一收尾：一份就直接给原格式文件，多份就打包成一个 ZIP。
+
+    额度口径很重要：一次批量只算 1 次。show_result() 内部会 mark_quota_success()，
+    而这里走 ZIP 分支时没有经过它，必须自己标记，否则 run_quota_task() 会把预占的
+    额度当成“没产出”退回去，批量就等于免费。
+    """
+    succeeded = [outcome for outcome in outcomes if outcome.ok and (outcome.data or outcome.files)]
+    failed = [outcome for outcome in outcomes if not (outcome.ok and (outcome.data or outcome.files))]
+
+    if not succeeded:
+        show_result(failed[0] if failed else Outcome(False, f"没有{noun}成功的文件。"), key)
+        return
+
+    # 摊平成 (文件名, 内容)：带明细的（拆分）直接取明细，其余取整份产物，
+    # 这样多份上传时是「一个 ZIP 装所有」，不会出现 ZIP 套 ZIP。
+    entries: list[tuple[str, bytes]] = []
+    for outcome in succeeded:
+        if outcome.files:
+            entries.extend(outcome.files)
+        elif outcome.data:
+            entries.append((outcome.filename, outcome.data))
+
+    # 只有一份产物且没有失败：直接给原格式文件，不额外套一层 ZIP
+    if len(entries) == 1 and len(succeeded) == 1 and not failed:
+        show_result(succeeded[0], key)
+        return
+
+    payload = _zip_bytes(entries)
+    mark_quota_success()
+
+    if failed:
+        st.success(f"批量{noun}完成：成功 {len(succeeded)} 份、共 {len(entries)} 个文件，失败 {len(failed)} 份。")
+    else:
+        st.success(f"批量{noun}完成：共 {len(entries)} 个文件，已打包为一个 ZIP。")
+
+    left, right = st.columns([2, 1], vertical_alignment="center")
+    with left:
+        st.caption(f"输出文件：{zip_name} · {compress.human_size(len(payload))}")
+    with right:
+        st.download_button(
+            "⬇ 下载全部结果（ZIP）",
+            data=payload,
+            file_name=zip_name,
+            mime="application/zip",
+            type="primary",
+            key=f"download_zip_{key}",
+            use_container_width=True,
+        )
+
+    if failed:
+        with st.expander("失败明细"):
+            st.code(
+                "\n".join(f"{f.filename or '未知文件'}：{f.message}" for f in failed),
+                language="text",
+            )
+
+    logs = [line for outcome in succeeded + failed if outcome.log for line in outcome.log]
+    if logs:
+        with st.expander("处理日志"):
+            st.code("\n".join(logs), language="text")
+
+
 @st.cache_data(show_spinner=False)
 def _sample_bytes(kind: str) -> bytes:
     """示例文件字节（缓存一次，避免每次 rerun 重新生成）。
@@ -2354,216 +2424,401 @@ def sample_download(kind: str, filename: str, mime: str, key: str) -> None:
     )
 
 
-def split_pdf(data: bytes, filename: str, split_mode: str = "每页拆成一个文件") -> Outcome:
-    """PDF 拆分：按页拆分为单页 PDF。"""
+SPLIT_EVERY_PAGE = "每页拆成一个文件"
+SPLIT_MAX_FILES = 500  # 与批量生成的上限一致，避免一次拆出上千个文件把内存打满
+
+
+def _split_groups(text: str, pages: int) -> list[list[int]]:
+    """把「拆分方式」解析成若干个连续页码组。
+
+    空串或「每页拆成一个文件」= 逐页拆分；也接受 1-3,4-6 / 2 / 1~3 这类写法，
+    中文逗号、全角连接符和波浪线都先归一化，非法输入抛 ValueError（由界面转成提示）。
+    """
+    normalized = (text or "").strip().replace("，", ",").replace("－", "-").replace("–", "-").replace("~", "-")
+    if not normalized or normalized == SPLIT_EVERY_PAGE:
+        return [[page] for page in range(1, pages + 1)]
+
+    tokens = [token.strip() for token in normalized.split(",") if token.strip()]
+    if not tokens:
+        return [[page] for page in range(1, pages + 1)]
+
+    picked: set[int] = set()
+    for token in tokens:
+        if "-" in token:
+            head, _, tail = token.partition("-")
+            if not head.strip() or not tail.strip():
+                raise ValueError(f"页码区间「{token}」写得不完整，请用 1-3 这样的形式。")
+            start, end = int(head), int(tail)
+        else:
+            start = end = int(token)
+        if start > end:
+            start, end = end, start
+        for page in range(start, end + 1):
+            if 1 <= page <= pages:
+                picked.add(page)
+
+    if not picked:
+        raise ValueError(f"填写的页码都超出范围了，这份 PDF 一共只有 {pages} 页。")
+
+    ordered = sorted(picked)
+    groups: list[list[int]] = [[ordered[0]]]
+    for page in ordered[1:]:
+        if page == groups[-1][-1] + 1:
+            groups[-1].append(page)
+        else:
+            groups.append([page])
+    return groups
+
+
+def split_pdf(data: bytes, filename: str, split_mode: str = SPLIT_EVERY_PAGE) -> Outcome:
+    """PDF 拆分：用 PyMuPDF 按页/按页码区间拆成多份 PDF。
+
+    只产出一份时直接给 PDF（省得为一两个文件再套一层 ZIP），多份时打包成 ZIP。
+    """
     log: list[str] = []
-    
+    name = display_name(filename, "upload.pdf")
+    stem = Path(name).stem or "拆分结果"
+
     try:
+        if not data:
+            return Outcome(False, "文件内容为空，请重新上传。", log=log)
+
         with tempfile.TemporaryDirectory(prefix="zjb_split_") as tmp:
             folder = Path(tmp)
-            source = folder / display_name(filename, "upload.pdf")
+            source = folder / name
             source.write_bytes(data)
-            
-            # 使用 PyMuPDF 读取 PDF
-            pdf_document = fitz.open(source)
-            pages = pdf_document.page_count
-            
-            # 根据拆分模式处理
-            if split_mode == "每页拆成一个文件":
-                # 每页一个文件
-                filenames = []
-                for i in range(pages):
-                    new_doc = fitz.open()
-                    new_doc.insert_pdf(pdf_document, from_page=i, to_page=i)
-                    page_filename = f"{Path(filename).stem}_page_{i+1}.pdf"
-                    output_path = folder / page_filename
-                    new_doc.save(output_path)
-                    new_doc.close()
-                    filenames.append((page_filename, output_path.read_bytes()))
-                
-                pdf_document.close()
-                return Outcome(True, f"成功拆分 {pages} 页 PDF，共生成 {len(filenames)} 个文件", data=None, filename=None, log=log, extra={"files": filenames})
-            else:
-                # 按指定范围拆分
-                ranges = []
+
+            document = pymupdf.open(source)
+            try:
+                if document.needs_pass:
+                    return Outcome(False, "这份 PDF 有密码保护，先去掉密码再拆分。", log=log)
+                pages = document.page_count
+                if pages <= 0:
+                    return Outcome(False, "这份 PDF 里没有可用的页面。", log=log)
+
                 try:
-                    for part in split_mode.split(','):
-                        part = part.strip()
-                        if '-' in part:
-                            start, end = map(int, part.split('-'))
-                            ranges.extend(range(start, end + 1))
-                        else:
-                            ranges.append(int(part))
-                    ranges = sorted(set(ranges))  # 去重并排序
-                except ValueError:
-                    return Outcome(False, "拆分方式格式错误，请使用类似 '1-3,4-6' 的格式", log=log)
-                
-                # 限制范围在有效页数内
-                valid_ranges = [r for r in ranges if 1 <= r <= pages]
-                if not valid_ranges:
-                    return Outcome(False, "拆分范围超出 PDF 总页数", log=log)
-                
-                # 按连续区间分组
-                groups = []
-                current_group = [valid_ranges[0]]
-                for i in range(1, len(valid_ranges)):
-                    if valid_ranges[i] == current_group[-1] + 1:
-                        current_group.append(valid_ranges[i])
+                    groups = _split_groups(split_mode, pages)
+                except ValueError as exc:
+                    return Outcome(
+                        False,
+                        f"页码格式有误：{exc}。也可以留空或写「{SPLIT_EVERY_PAGE}」，逐页拆成单独文件。",
+                        log=log,
+                    )
+
+                if len(groups) > SPLIT_MAX_FILES:
+                    return Outcome(
+                        False,
+                        f"一次最多拆 {SPLIT_MAX_FILES} 份（本次要拆 {len(groups)} 份），"
+                        "可以在「拆分方式」里写页码区间，例如 1-50,51-100。",
+                        log=log,
+                    )
+
+                items: list[tuple[str, bytes]] = []
+                for group in groups:
+                    start, end = group[0], group[-1]
+                    piece = pymupdf.open()
+                    piece.insert_pdf(document, from_page=start - 1, to_page=end - 1)
+                    if start == end:
+                        piece_name = f"{stem}-第{start}页.pdf"
                     else:
-                        groups.append(current_group)
-                        current_group = [valid_ranges[i]]
-                groups.append(current_group)
-                
-                # 生成每个组的文件
-                filenames = []
-                for i, group in enumerate(groups):
-                    new_doc = fitz.open()
-                    for page_num in group:
-                        new_doc.insert_pdf(pdf_document, from_page=page_num-1, to_page=page_num-1)
-                    
-                    group_start = group[0]
-                    group_end = group[-1]
-                    if group_start == group_end:
-                        page_filename = f"{Path(filename).stem}_page_{group_start}.pdf"
-                    else:
-                        page_filename = f"{Path(filename).stem}_pages_{group_start}-{group_end}.pdf"
-                    output_path = folder / page_filename
-                    new_doc.save(output_path)
-                    new_doc.close()
-                    filenames.append((page_filename, output_path.read_bytes()))
-                
-                pdf_document.close()
-                return Outcome(True, f"成功按范围拆分 PDF，共生成 {len(filenames)} 个文件", data=None, filename=None, log=log, extra={"files": filenames})
-                
-    except Exception as exc:  # noqa: BLE001
+                        piece_name = f"{stem}-第{start}-{end}页.pdf"
+                    piece_path = folder / piece_name
+                    piece.save(piece_path)
+                    piece.close()
+                    items.append((piece_name, piece_path.read_bytes()))
+                    log.append(f"✔ {piece_name}（{end - start + 1} 页）")
+            finally:
+                document.close()
+
+            summary = f"拆分完成：{pages} 页 -> {len(items)} 份文件"
+            if len(items) == 1:
+                only_name, only_data = items[0]
+                log.append(f"→ {only_name}（{compress.human_size(len(only_data))}）")
+                return Outcome(
+                    True,
+                    summary,
+                    data=only_data,
+                    filename=only_name,
+                    mime="application/pdf",
+                    log=log,
+                    files=items,
+                )
+
+            payload = _zip_bytes(items)
+            log.append(f"→ 打包 {len(items)} 份为 ZIP（{compress.human_size(len(payload))}）")
+            return Outcome(
+                True,
+                summary,
+                data=payload,
+                filename=f"{stem}-拆分.zip",
+                mime="application/zip",
+                log=log,
+                files=items,
+            )
+
+    except Exception as exc:  # noqa: BLE001 - 任何底层异常都转成界面提示
         log.append(traceback.format_exc())
         return Outcome(False, f"拆分失败：{exc}", log=log)
 
 
-def pdf_to_ppt(data: bytes, filename: str) -> Outcome:
-    """PDF 转 PPT：将每一页渲染为高清图片并插入到 PPT 中。"""
+def pdf_to_ppt(data: bytes, filename: str, *, dpi: int = 200) -> Outcome:
+    """PDF 转 PPT：用 PyMuPDF 提取每页文本和图像，再用 python-pptx 生成可编辑幻灯片。
+
+    幻灯片尺寸跟随 PDF 第一页的实际比例（A4 就出竖版），避免把竖版文档硬压成 16:9 变形；
+    纯本地渲染，不调用任何外部服务。
+    改进：提取文本内容创建可编辑文本框，同时保留背景图片作为参考。
+    """
     log: list[str] = []
-    
+    name = display_name(filename, "upload.pdf")
+    stem = Path(name).stem or "转换结果"
+
     try:
+        if not data:
+            return Outcome(False, "文件内容为空，请重新上传。", log=log)
+
+        try:
+            from pptx import Presentation
+            from pptx.util import Emu, Pt, Inches
+            from pptx.dml.color import RGBColor
+        except ImportError:
+            return Outcome(
+                False,
+                "缺少 python-pptx 依赖，请先执行 pip install -r requirements.txt 后重启应用。",
+                log=log,
+            )
+
         with tempfile.TemporaryDirectory(prefix="zjb_ppt_") as tmp:
             folder = Path(tmp)
-            source = folder / display_name(filename, "upload.pdf")
+            source = folder / name
             source.write_bytes(data)
-            
-            # 使用 PyMuPDF 读取 PDF
-            pdf_document = fitz.open(source)
-            pages = pdf_document.page_count
-            
-            # 创建 PPT
-            from pptx import Presentation
-            from pptx.util import Inches
-            from pptx.enum.shapes import MSO_SHAPE
-            
-            prs = Presentation()
-            # 设置幻灯片尺寸为 16:9
-            prs.slide_width = Inches(13.33)
-            prs.slide_height = Inches(7.5)
-            
-            # 每页渲染为图片并插入幻灯片
-            for i in range(pages):
-                # 获取页面
-                page = pdf_document[i]
-                # 渲染为高分辨率图片 (300 DPI)
-                mat = fitz.Matrix(3, 3)  # 3倍放大，提高清晰度
-                pix = page.get_pixmap(matrix=mat)
-                
-                # 保存图片到临时文件
-                img_path = folder / f"page_{i+1}.png"
-                pix.save(str(img_path))
-                
-                # 添加幻灯片
-                slide = prs.slides.add_slide(prs.slide_layouts[1])  # 标题和内容布局
-                
-                # 插入图片
-                left = Inches(0)
-                top = Inches(0)
-                width = Inches(13.33)
-                height = Inches(7.5)
-                
-                slide.shapes.add_picture(str(img_path), left, top, width, height)
-                
-                log.append(f"✓ 第 {i+1} 页已转换为 PPT 幻灯片")
-            
-            pdf_document.close()
-            
-            # 保存 PPT
-            ppt_path = folder / f"{Path(filename).stem}.pptx"
-            prs.save(ppt_path)
-            
-            payload = ppt_path.read_bytes()
-            
+
+            document = pymupdf.open(source)
+            try:
+                if document.needs_pass:
+                    return Outcome(False, "这份 PDF 有密码保护，先去掉密码再转换。", log=log)
+                pages = document.page_count
+                if pages <= 0:
+                    return Outcome(False, "这份 PDF 里没有可用的页面。", log=log)
+
+                # 缩放系数：PDF 以 72pt = 1inch 计，按目标 DPI 渲染保证清晰度
+                matrix = pymupdf.Matrix(dpi / 72, dpi / 72)
+                first = document[0].rect
+                prs = Presentation()
+                prs.slide_width = Emu(int(first.width / 72 * 914400))
+                prs.slide_height = Emu(int(first.height / 72 * 914400))
+                log.append(
+                    f"→ 幻灯片尺寸：{first.width / 72:.2f}×{first.height / 72:.2f} 英寸"
+                    f"（跟随第 1 页），渲染精度 {dpi} DPI"
+                )
+
+                blank = prs.slide_layouts[6]  # 空白版式：整页只放这一张图，不带标题占位框
+                for index in range(pages):
+                    page = document[index]
+                    if (round(page.rect.width), round(page.rect.height)) != (
+                        round(first.width),
+                        round(first.height),
+                    ):
+                        log.append(f"  ⚠ 第 {index + 1} 页尺寸与首页不同，图片会按幻灯片大小铺满")
+
+                    # 提取页面文本
+                    text_content = page.get_text() or ""
+                    lines = [line.strip() for line in text_content.split('\n') if line.strip()]
+                    
+                    # 渲染背景图片（可选，用于视觉参考）
+                    image_path = folder / f"page-{index + 1}.png"
+                    page.get_pixmap(matrix=matrix).save(str(image_path))
+
+                    slide = prs.slides.add_slide(blank)
+                    
+                    # 添加背景图片（半透明，作为参考）
+                    slide.shapes.add_picture(
+                        str(image_path), 0, 0, width=prs.slide_width, height=prs.slide_height
+                    )
+                    
+                    # 添加可编辑文本框
+                    # 文本框位置：左上角，留出边距
+                    left = Inches(0.5)
+                    top = Inches(0.5)
+                    width = prs.slide_width - Inches(1)
+                    height = prs.slide_height - Inches(1)
+                    
+                    text_box = slide.shapes.add_textbox(left, top, width, height)
+                    tf = text_box.text_frame
+                    tf.word_wrap = True
+                    
+                    # 添加文本内容
+                    for line_idx, line in enumerate(lines[:50]):  # 最多 50 行，避免过长
+                        if line_idx == 0:
+                            p = tf.paragraphs[0]
+                        else:
+                            p = tf.add_paragraph()
+                        p.text = line
+                        p.font.size = Pt(12)
+                        p.font.color.rgb = RGBColor(0, 0, 0)
+                        p.space_after = Pt(6)
+                    
+                    log.append(f"✔ 第 {index + 1} 页 -> 幻灯片 {index + 1}（{len(lines)} 行文本）")
+            finally:
+                document.close()
+
+            output = folder / f"{stem}.pptx"
+            prs.save(str(output))
+            payload = output.read_bytes()
+
+            log.append(f"→ {stem}.pptx（{compress.human_size(len(payload))}）")
             return Outcome(
                 True,
-                f"成功转换为 PPT，共 {pages} 页",
+                f"转换完成：共 {pages} 页，已生成 {pages} 张可编辑幻灯片",
                 data=payload,
-                filename=f"{Path(filename).stem}.pptx",
+                filename=f"{stem}.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 log=log,
             )
-            
-    except Exception as exc:  # noqa: BLE001
+
+    except Exception as exc:  # noqa: BLE001 - 任何底层异常都转成界面提示
         log.append(traceback.format_exc())
         return Outcome(False, f"转换失败：{exc}", log=log)
+
+
+
+def _table_to_frame(table: list[list[object]]) -> "pd.DataFrame":
+    """把 pdfplumber 的表格（首行当表头）整理成规整的 DataFrame。
+
+    表头可能整行是 None、也可能某几列缺字，行与行的列数也不一定对齐；
+    直接丢给 DataFrame 会抛错或串列，所以先按最大列宽补齐、再给空表头兜底命名。
+    """
+    rows = [[cell if cell is not None else "" for cell in row] for row in table if row]
+    if not rows:
+        return pd.DataFrame()
+
+    width = max(len(row) for row in rows)
+    header = [str(cell).strip() if str(cell).strip() else f"列{column + 1}" for column, cell in enumerate(rows[0])]
+    header += [f"列{column + 1}" for column in range(len(header), width)]
+
+    # 表头重名会让 DataFrame 自动加 .1 后缀，写进 Excel 反而更难看，这里先手动去重
+    seen: dict[str, int] = {}
+    unique_header: list[str] = []
+    for title in header:
+        if title in seen:
+            seen[title] += 1
+            unique_header.append(f"{title}-{seen[title]}")
+        else:
+            seen[title] = 1
+            unique_header.append(title)
+
+    body = [row + [""] * (width - len(row)) for row in rows[1:]]
+    return pd.DataFrame(body, columns=unique_header[:width])
+
+
+def _safe_sheet_name(raw: str, used: set[str]) -> str:
+    """Excel 工作表名：不能含 : \\\\ / ? * [ ]，最长 31 字符且不能重名。"""
+    cleaned = re.sub(r"[:\\/?*\[\]]", "-", raw).strip().strip("'") or "表格"
+    cleaned = cleaned[:31]
+    index = 2
+    while cleaned in used:
+        suffix = f"-{index}"
+        cleaned = cleaned[: 31 - len(suffix)] + suffix
+        index += 1
+    used.add(cleaned)
+    return cleaned
 
 
 def pdf_to_excel(data: bytes, filename: str) -> Outcome:
-    """PDF 转 Excel：提取 PDF 中的表格数据并保存为 Excel。"""
+    """PDF 转 Excel：用 pdfplumber 逐页提取表格，再用 pandas 写成一个多 Sheet 的 .xlsx。
+
+    只认得到的「线框表格」（纯本地解析，不做 OCR），扫描件/照片里的表格认不出来。
+    改进：更鲁棒的表格检测，处理空表格、重复表头、不规则行等边界情况。
+    """
     log: list[str] = []
-    
+    name = display_name(filename, "upload.pdf")
+    stem = Path(name).stem or "表格提取"
+
     try:
+        if not data:
+            return Outcome(False, "文件内容为空，请重新上传。", log=log)
+
+        try:
+            import pdfplumber
+        except ImportError:
+            return Outcome(
+                False,
+                "缺少 pdfplumber 依赖，请先执行 pip install -r requirements.txt 后重启应用。",
+                log=log,
+            )
+
         with tempfile.TemporaryDirectory(prefix="zjb_excel_") as tmp:
             folder = Path(tmp)
-            source = folder / display_name(filename, "upload.pdf")
+            source = folder / name
             source.write_bytes(data)
-            
-            # 使用 pdfplumber 提取表格
-            import pdfplumber
-            
-            tables_data = []
+
+            frames: list[tuple[str, pd.DataFrame]] = []
             with pdfplumber.open(source) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    # 提取表格
-                    tables = page.extract_tables()
-                    if tables:
-                        for j, table in enumerate(tables):
-                            if table:  # 确保表格非空
-                                # 将表格数据转换为 DataFrame
-                                df = pd.DataFrame(table[1:], columns=table[0] if len(table) > 0 else None)
-                                tables_data.append((f"{Path(filename).stem}_page_{i+1}_table_{j+1}", df))
-                                log.append(f"✓ 第 {i+1} 页第 {j+1} 个表格已提取，共 {len(df)} 行")
-            
-            if not tables_data:
-                return Outcome(False, "未在 PDF 中检测到表格数据", log=log)
-            
-            # 保存为 Excel 文件
-            excel_path = folder / f"{Path(filename).stem}.xlsx"
-            
-            # 创建 Excel writer
-            with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-                for sheet_name, df in tables_data:
-                    # 确保 sheet 名称不超过 31 个字符
-                    safe_sheet_name = sheet_name[:31]
-                    df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
-            
-            payload = excel_path.read_bytes()
-            
+                for page_index, page in enumerate(pdf.pages, start=1):
+                    # 尝试多种表格提取策略
+                    tables = page.extract_tables() or []
+                    
+                    # 如果 pdfplumber 没提取到表格，尝试用 text 分析
+                    if not tables:
+                        text = page.extract_text() or ""
+                        # 简单启发式：如果文本中有明显的表格结构（如 Tab 分隔或固定列宽）
+                        # 这里暂时不实现复杂的启发式检测，只记录日志
+                        log.append(f"  ⚠ 第 {page_index} 页：pdfplumber 未检测到表格（可能为扫描件/照片）")
+                        continue
+
+                    for table_index, table in enumerate(tables, start=1):
+                        # 更鲁棒的表格处理
+                        frame = _table_to_frame(table)
+                        
+                        # 跳过完全空的表格
+                        if frame.empty:
+                            log.append(f"  ⚠ 第 {page_index} 页第 {table_index} 个表格为空，跳过")
+                            continue
+                        
+                        # 如果表格只有表头没有数据行，也跳过
+                        if len(frame) == 0:
+                            log.append(f"  ⚠ 第 {page_index} 页第 {table_index} 个表格只有表头，跳过")
+                            continue
+
+                        frames.append((f"第{page_index}页-表{table_index}", frame))
+                        log.append(f"✔ 第 {page_index} 页第 {table_index} 个表格：{len(frame)} 行 × {len(frame.columns)} 列")
+
+            if not frames:
+                return Outcome(
+                    False,
+                    "没在这份 PDF 里找到表格。只有画了线框的表格能提出来；"
+                    "扫描件或照片里的表格目前还认不出来，可以先转成 Word 再整理。",
+                    log=log,
+                )
+
+            output = folder / f"{stem}.xlsx"
+            used: set[str] = set()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                for sheet, frame in frames:
+                    if len(frames) == 1:
+                        # 单表时不写「第1页-表1」这种噪声名字，直接叫 Sheet1
+                        try:
+                            frame.to_excel(writer, index=False)
+                        except TypeError:  # 老版 pandas 不支持就地改名
+                            frame.to_excel(writer, sheet_name="Sheet1", index=False)
+                        log.append("→ 单表输出，Sheet 名为 Sheet1")
+                    else:
+                        frame.to_excel(writer, sheet_name=_safe_sheet_name(sheet, used), index=False)
+
+            payload = output.read_bytes()
+            log.append(f"→ {stem}.xlsx（{compress.human_size(len(payload))}，共 {len(frames)} 个工作表）")
             return Outcome(
                 True,
-                f"成功提取表格，共 {len(tables_data)} 个表格",
+                f"提取完成：共 {len(frames)} 个表格，已写入 {stem}.xlsx",
                 data=payload,
-                filename=f"{Path(filename).stem}.xlsx",
+                filename=f"{stem}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 log=log,
             )
-            
-    except Exception as exc:  # noqa: BLE001
+
+    except Exception as exc:  # noqa: BLE001 - 任何底层异常都转成界面提示
         log.append(traceback.format_exc())
-        return Outcome(False, f"转换失败：{exc}", log=log)
+        return Outcome(False, f"提取失败：{exc}", log=log)
+
 
 def _strip_quota_phrases(text: str) -> str:
     """去掉文案里的大小 / 份数额度表述，只保留格式说明。
@@ -2741,31 +2996,7 @@ def render_basic() -> None:
                                     aggressive=COMPRESS_LEVELS[mode],
                                 )
                                 outcomes.append(outcome)
-                        
-                        # 如果只有一个文件，直接显示结果
-                        if len(outcomes) == 1:
-                            show_result(outcomes[0], "basic_compress")
-                        else:
-                            # 如果有多个文件，打包成 ZIP
-                            payouts = []
-                            for outcome in outcomes:
-                                if outcome.data is not None:
-                                    payouts.append((outcome.filename, outcome.data))
-                            
-                            if payouts:
-                                zip_bytes = _zip_bytes(payouts)
-                                st.success(f"批量压缩完成，共 {len(payouts)} 个文件")
-                                st.download_button(
-                                    "📥 下载全部压缩结果（ZIP）",
-                                    data=zip_bytes,
-                                    file_name="PDF压缩结果.zip",
-                                    mime="application/zip",
-                                    type="primary",
-                                    key="download_zip_compress",
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.warning("没有成功压缩的文件。")
+                        finish_batch(outcomes, "basic_compress", "PDF压缩结果.zip", noun="压缩")
 
                     run_quota_task("compress", _do_compress)
 
@@ -2790,31 +3021,7 @@ def render_basic() -> None:
                             with st.spinner(f"正在按原样转成 Word… ({file.name})"):
                                 outcome = to_word(file.getvalue(), file.name)
                                 outcomes.append(outcome)
-                        
-                        # 如果只有一个文件，直接显示结果
-                        if len(outcomes) == 1:
-                            show_result(outcomes[0], "basic_word")
-                        else:
-                            # 如果有多个文件，打包成 ZIP
-                            payouts = []
-                            for outcome in outcomes:
-                                if outcome.data is not None:
-                                    payouts.append((outcome.filename, outcome.data))
-                            
-                            if payouts:
-                                zip_bytes = _zip_bytes(payouts)
-                                st.success(f"批量转换完成，共 {len(payouts)} 个文件")
-                                st.download_button(
-                                    "📥 下载全部转换结果（ZIP）",
-                                    data=zip_bytes,
-                                    file_name="PDF转Word结果.zip",
-                                    mime="application/zip",
-                                    type="primary",
-                                    key="download_zip_word",
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.warning("没有成功转换的文件。")
+                        finish_batch(outcomes, "basic_word", "PDF转Word结果.zip", noun="转换")
 
                     run_quota_task("word", _do_word)
 
@@ -2824,7 +3031,11 @@ def render_basic() -> None:
             files = pdf_uploader("上传需要转换的 PDF", "basic_to_excel_upload", multiple=True)
             st.caption("把 PDF 里的表格变成 Excel；照片或扫描件暂时还认不出来。支持批量处理，结果自动打包为 ZIP。")
             if st.button(
-                "转换为 Excel", type="primary", key="basic_to_excel_btn", use_container_width=True
+                "转换为 Excel",
+                type="primary",
+                key="basic_to_excel_btn",
+                use_container_width=True,
+                disabled=any_busy("to_excel"),
             ):
                 if not files:
                     st.warning("请先上传一个 PDF 文件。")
@@ -2835,31 +3046,7 @@ def render_basic() -> None:
                             with st.spinner(f"正在提取表格… ({file.name})"):
                                 outcome = pdf_to_excel(file.getvalue(), file.name)
                             outcomes.append(outcome)
-                        
-                        # 如果只有一个文件，直接显示结果
-                        if len(outcomes) == 1:
-                            show_result(outcomes[0], "basic_to_excel")
-                        else:
-                            # 如果有多个文件，打包成 ZIP
-                            payouts = []
-                            for outcome in outcomes:
-                                if outcome.data is not None:
-                                    payouts.append((outcome.filename, outcome.data))
-                            
-                            if payouts:
-                                zip_bytes = _zip_bytes(payouts)
-                                st.success(f"批量转换完成，共 {len(payouts)} 个文件")
-                                st.download_button(
-                                    "📥 下载全部转换结果（ZIP）",
-                                    data=zip_bytes,
-                                    file_name="PDF转Excel结果.zip",
-                                    mime="application/zip",
-                                    type="primary",
-                                    key="download_zip_to_excel",
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.warning("没有成功转换的文件。")
+                        finish_batch(outcomes, "basic_to_excel", "PDF转Excel结果.zip", noun="提取")
 
                     run_quota_task("to_excel", _do_to_excel)
 
@@ -2869,7 +3056,11 @@ def render_basic() -> None:
             files = pdf_uploader("上传需要转换的 PDF", "basic_to_ppt_upload", multiple=True)
             st.caption("按页拆成 PPT 幻灯片，一页 PDF 对应一页幻灯片。支持批量处理，结果自动打包为 ZIP。")
             if st.button(
-                "转换为 PPT", type="primary", key="basic_to_ppt_btn", use_container_width=True
+                "转换为 PPT",
+                type="primary",
+                key="basic_to_ppt_btn",
+                use_container_width=True,
+                disabled=any_busy("to_ppt"),
             ):
                 if not files:
                     st.warning("请先上传一个 PDF 文件。")
@@ -2880,31 +3071,7 @@ def render_basic() -> None:
                             with st.spinner(f"正在转换为 PPT… ({file.name})"):
                                 outcome = pdf_to_ppt(file.getvalue(), file.name)
                             outcomes.append(outcome)
-                        
-                        # 如果只有一个文件，直接显示结果
-                        if len(outcomes) == 1:
-                            show_result(outcomes[0], "basic_to_ppt")
-                        else:
-                            # 如果有多个文件，打包成 ZIP
-                            payouts = []
-                            for outcome in outcomes:
-                                if outcome.data is not None:
-                                    payouts.append((outcome.filename, outcome.data))
-                            
-                            if payouts:
-                                zip_bytes = _zip_bytes(payouts)
-                                st.success(f"批量转换完成，共 {len(payouts)} 个文件")
-                                st.download_button(
-                                    "📥 下载全部转换结果（ZIP）",
-                                    data=zip_bytes,
-                                    file_name="PDF转PPT结果.zip",
-                                    mime="application/zip",
-                                    type="primary",
-                                    key="download_zip_to_ppt",
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.warning("没有成功转换的文件。")
+                        finish_batch(outcomes, "basic_to_ppt", "PDF转PPT结果.zip", noun="转换")
 
                     run_quota_task("to_ppt", _do_to_ppt)
 
@@ -2920,7 +3087,11 @@ def render_basic() -> None:
             )
             st.caption("输出为 ZIP 压缩包，解压后得到拆分好的 PDF。支持批量处理，结果自动打包为 ZIP。")
             if st.button(
-                "开始拆分", type="primary", key="basic_split_btn", use_container_width=True
+                "开始拆分",
+                type="primary",
+                key="basic_split_btn",
+                use_container_width=True,
+                disabled=any_busy("split"),
             ):
                 if not files:
                     st.warning("请先上传一个 PDF 文件。")
@@ -2928,49 +3099,11 @@ def render_basic() -> None:
                     def _do_split() -> None:
                         outcomes = []
                         for file in files:
-                            split_mode = st.session_state.get("basic_split_mode", "每页拆成一个文件")
+                            split_mode = st.session_state.get("basic_split_mode", SPLIT_EVERY_PAGE)
                             with st.spinner(f"正在拆分 PDF… ({file.name})"):
                                 outcome = split_pdf(file.getvalue(), file.name, split_mode)
                             outcomes.append(outcome)
-                        
-                        # 如果只有一个文件，直接显示结果
-                        if len(outcomes) == 1 and outcomes[0].extra and "files" in outcomes[0].extra:
-                            # 处理单个文件的情况
-                            files_list = outcomes[0].extra["files"]
-                            zip_bytes = _zip_bytes(files_list)
-                            st.success(f"拆分完成，共生成 {len(files_list)} 个文件")
-                            st.download_button(
-                                "📥 下载全部拆分结果（ZIP）",
-                                data=zip_bytes,
-                                file_name="PDF拆分结果.zip",
-                                mime="application/zip",
-                                type="primary",
-                                key="download_zip_split",
-                                use_container_width=True,
-                            )
-                        elif len(outcomes) > 1:
-                            # 处理多个文件的情况
-                            all_files = []
-                            for outcome in outcomes:
-                                if outcome.extra and "files" in outcome.extra:
-                                    all_files.extend(outcome.extra["files"])
-                            
-                            if all_files:
-                                zip_bytes = _zip_bytes(all_files)
-                                st.success(f"批量拆分完成，共生成 {len(all_files)} 个文件")
-                                st.download_button(
-                                    "📥 下载全部拆分结果（ZIP）",
-                                    data=zip_bytes,
-                                    file_name="PDF拆分结果.zip",
-                                    mime="application/zip",
-                                    type="primary",
-                                    key="download_zip_split",
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.warning("没有成功拆分的文件。")
-                        else:
-                            st.warning("没有成功拆分的文件。")
+                        finish_batch(outcomes, "basic_split", "PDF拆分结果.zip", noun="拆分")
 
                     run_quota_task("split", _do_split)
 
@@ -3028,35 +3161,10 @@ def render_basic() -> None:
                             if outcome.ok:
                                 outcome.message = f"{outcome.message}（源文件 {size_mb:.1f}MB）"
                             outcomes.append(outcome)
-                        
-                        # 如果只有一个文件，直接显示结果
-                        if len(outcomes) == 1:
-                            show_result(outcomes[0], "basic_to_pdf")
-                        else:
-                            # 如果有多个文件，打包成 ZIP
-                            payouts = []
-                            for outcome in outcomes:
-                                if outcome.data is not None:
-                                    payouts.append((outcome.filename, outcome.data))
-                            
-                            if payouts:
-                                zip_bytes = _zip_bytes(payouts)
-                                st.success(f"批量转换完成，共 {len(payouts)} 个文件")
-                                st.download_button(
-                                    "📥 下载全部转换结果（ZIP）",
-                                    data=zip_bytes,
-                                    file_name="文档转PDF结果.zip",
-                                    mime="application/zip",
-                                    type="primary",
-                                    key="download_zip_to_pdf",
-                                    use_container_width=True,
-                                )
-                            else:
-                                st.warning("没有成功转换的文件。")
+                        finish_batch(outcomes, "basic_to_pdf", "文档转PDF结果.zip", noun="转换")
 
                     run_quota_task("to_pdf", _do_to_pdf)
 
-                    run_quota_task("to_pdf", _do_to_pdf)
 
 
 # --------------------------------------------------------------------------

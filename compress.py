@@ -101,11 +101,22 @@ _LOSSLESS_SAVE = dict(
 # 二次压缩后阅读器无法解码，必须让图像流保持原样写入。
 _JPEG_SAVE_OVERRIDES = dict(deflate_images=False)
 # 达到目标时才逐级启用的降级（仅影响照片类位图，不影响文字/页面尺寸）
+# 目标：200MB→10MB，需要更激进的图片压缩（7 级递进）
 _FALLBACK_STEPS: list[tuple[str, dict]] = [
-    ("高质量重压（照片图片 JPEG 92）", {"drop_thumbnails": True, "jpeg_quality": 92}),
+    # 第 1 级：高质量重压（照片图片 JPEG 95），删除缩略图
+    ("高质量重压（照片图片 JPEG 95）", {"drop_thumbnails": True, "jpeg_quality": 95}),
+    # 第 2 级：高质量重压（照片图片 JPEG 90）
+    ("高质量重压（照片图片 JPEG 90）", {"jpeg_quality": 90}),
+    # 第 3 级：中高质量重压（照片图片 JPEG 85）
     ("中高质量重压（照片图片 JPEG 85）", {"jpeg_quality": 85}),
+    # 第 4 级：中等重压（照片图片 JPEG 78）
     ("中等重压（照片图片 JPEG 78）", {"jpeg_quality": 78}),
+    # 第 5 级：较高压缩（照片图片 JPEG 70）
     ("较高压缩（照片图片 JPEG 70）", {"jpeg_quality": 70}),
+    # 第 6 级：激进压缩（照片图片 JPEG 60），保留可读性
+    ("激进压缩（照片图片 JPEG 60）", {"jpeg_quality": 60}),
+    # 第 7 级：极限压缩（照片图片 JPEG 50），最低可读性
+    ("极限压缩（照片图片 JPEG 50）", {"jpeg_quality": 50}),
 ]
 
 
