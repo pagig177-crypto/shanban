@@ -1045,6 +1045,42 @@ div[data-baseweb="base-input"] {
     box-shadow: 0 10px 22px rgba(11, 36, 71, .2);
 }
 
+/* 批量生成页的示例下载按钮：极简浅蓝文字链接风格，不要胶囊框 */
+[class*="st-key-batch_sample"] .stDownloadButton > button,
+[class*="st-key-batch_sample"] .stButton > button {
+    background: transparent !important;
+    color: #2563EB !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: .25rem 0 !important;
+    min-height: auto !important;
+    font-weight: 500 !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+}
+[class*="st-key-batch_sample"] .stDownloadButton > button:hover,
+[class*="st-key-batch_sample"] .stButton > button:hover {
+    background: transparent !important;
+    color: #1D4ED8 !important;
+    transform: none !important;
+    box-shadow: none !important;
+    text-decoration: underline !important;
+}
+[class*="st-key-batch_sample"] .stDownloadButton > button:active,
+[class*="st-key-batch_sample"] .stDownloadButton > button:focus,
+[class*="st-key-batch_sample"] .stButton > button:active,
+[class*="st-key-batch_sample"] .stButton > button:focus {
+    background: transparent !important;
+    color: #1D4ED8 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+/* 示例下载按钮的 key 容器占满列宽，保证左对齐 */
+[class*="st-key-batch_sample"] .stDownloadButton,
+[class*="st-key-batch_sample"] .stDownloadButton > button {
+    width: auto !important;
+}
+
 </style>
 """
 
@@ -3399,15 +3435,14 @@ def _batch_dialog() -> None:
 def render_batch() -> None:
     page_head(
         "批量生成",
-        "1 份名单 + 1 份模板，一键生成几百份文件。合同、Offer、对账单不用再一份份改。",
+        "1份名单 + 1份模板，一键生成几百份录取通知书、劳动合同、结业证书、邀请函、参会证。告别手动复制粘贴。",
     )
 
     with card("batch"):
-        col_left, col_mid, col_right = st.columns(3, gap="large")
-
-        # ---- 第 1 步：名单 ----
-        with col_left:
-            step_head("第 1 步：准备名单", "每一行代表一个人/一份文件")
+        # ---- 第 1 步：上传名单 ----
+        step_head("第 1 步：上传名单", "每一行代表一个人/一份文件")
+        name_main, name_side = st.columns([2, 1], gap="large")
+        with name_main:
             excel_files = _render_uploader(
                 "上传 Excel（支持 .xlsx / .csv）",
                 "batch_excel",
@@ -3415,17 +3450,20 @@ def render_batch() -> None:
                 caption_tip="支持 .xlsx / .csv",
                 dragzone_tip=DRAGZONE_TIP_EXCEL,
             )
-            excel = excel_files[0] if excel_files else None
+            st.caption("💡 第一行请填写表头（如：姓名、编号、日期）。")
+        with name_side:
             sample_download(
                 "excel",
                 "批量生成示例数据.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "batch_sample_excel",
             )
+        excel = excel_files[0] if excel_files else None
 
-        # ---- 第 2 步：模板 ----
-        with col_mid:
-            step_head("第 2 步：准备模板", "把要改的地方留成 {{姓名}} 这样的空位")
+        # ---- 第 2 步：上传模板 ----
+        step_head("第 2 步：上传模板", "把要改的地方留成 {{姓名}} 这样的空位")
+        tpl_main, tpl_side = st.columns([2, 1], gap="large")
+        with tpl_main:
             template_files = _render_uploader(
                 "上传 PDF 模板",
                 "batch_template",
@@ -3433,31 +3471,34 @@ def render_batch() -> None:
                 caption_tip="支持 PDF",
                 dragzone_tip=DRAGZONE_TIP_PDF,
             )
-            template = template_files[0] if template_files else None
+            st.caption("💡 把要替换的地方写成 {{姓名}} 这样的格式。不知道怎么弄？下载右侧的模板示例看看。")
+        with tpl_side:
             sample_download(
                 "pdf",
                 "批量生成模板示例.pdf",
                 "application/pdf",
                 "batch_sample_pdf",
             )
-            st.caption(BATCH_PLACEHOLDER_HINT)
+        template = template_files[0] if template_files else None
 
-        # ---- 第 3 步：生成 ----
-        with col_right:
-            step_head("第 3 步：一键生成", "先试看一份，没问题再全部打包")
-            do_preview = st.button(
-                "🔍 试看第一份效果",
-                key="batch_preview_btn",
-                use_container_width=True,
-                disabled=any_busy("batch_preview"),
-            )
-            do_generate = st.button(
-                "⚡ 批量生成全部打包下载",
-                type="primary",
-                key="batch_btn",
-                use_container_width=True,
-                disabled=any_busy("batch"),
-            )
+        # ---- 第 3 步：生成文件 ----
+        step_head("第 3 步：生成文件", "先试看一份，没问题再全部打包")
+        files_ready = excel is not None and template is not None
+        do_preview = st.button(
+            "🔍 试看第一份效果",
+            key="batch_preview_btn",
+            use_container_width=True,
+            disabled=any_busy("batch_preview"),
+        )
+        do_generate = st.button(
+            "⚡ 批量生成全部打包下载",
+            type="primary",
+            key="batch_btn",
+            use_container_width=True,
+            disabled=any_busy("batch") or not files_ready,
+        )
+        if not files_ready:
+            st.caption("请先上传名单和模板")
 
         # ---- 读取输入 ----
         table: batch_fill.TableData | None = None
