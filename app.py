@@ -741,6 +741,16 @@ header[data-testid="stHeader"] {
 [data-testid="stCheckbox"] [data-selected] [data-testid="stCheckboxRootElement"] svg {
     color: white !important;
 }
+/* 强制修改原生 checkbox 的颜色 */
+label[data-baseweb="checkbox"] span {
+    background-color: #10B981 !important; /* 选中时的绿色 */
+    border-color: #10B981 !important;
+}
+/* 未选中时的边框改成灰色 */
+label[data-baseweb="checkbox"] span[aria-checked="false"] {
+    background-color: transparent !important;
+    border-color: #D1D5DB !important;
+}
 /* 单选项（压缩模式）横向居中排布：新版 DOM 是 [data-testid="stRadioGroup"] > div > label */
 [data-testid="stRadio"] [role="radiogroup"],
 [data-testid="stRadioGroup"] {
@@ -3310,7 +3320,7 @@ def render_replace() -> None:
             st.caption(f"已填 {filled} 条替换规则。")
 
         replace_all = st.checkbox(
-            "✅ 把全篇的这个字都改掉",
+            "全部替换",
             value=True,
             key="replace_all",
             help="勾上：全文每一处都改；取消：只改第一处。",
@@ -3336,7 +3346,7 @@ def render_replace() -> None:
         if problem:
             st.caption(f"⚠️ {problem}")
         elif replace_all:
-            st.caption("✅ 全篇出现的地方都会改。")
+            st.caption("全篇出现的地方都会改。")
         else:
             st.caption("只改每处第一次出现的位置。")
 
