@@ -173,71 +173,80 @@ CUSTOM_CSS = """
     0.5 移动端适配：768px 以下不换行横向滑动导航栏、压缩顶部留白
    ============================================================ */
 @media (max-width: 768px) {
-    /* 强制导航栏横向滑动：不换行，超出屏幕可滑动 */
-    [data-testid="stTabs"] [role="tablist"],
-    .stTabs [role="tablist"] {
-        white-space: nowrap !important;
-        overflow-x: auto !important;
+    /* ── 导航栏横向滑动（不换行、可滑动、无滚动条） ── */
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {
+        display: flex !important;
         flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        white-space: nowrap !important;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;           /* Firefox */
         -ms-overflow-style: none;        /* IE / Edge */
+        padding-bottom: 0px !important;
+        gap: 10px !important;
     }
-    [data-testid="stTabs"] [role="tablist"]::-webkit-scrollbar,
-    .stTabs [role="tablist"]::-webkit-scrollbar {
+    [data-testid="stTabs"] [data-baseweb="tab-list"]::-webkit-scrollbar {
         display: none !important;
-        width: 0 !important;
-        height: 0 !important;
     }
 
-    /* Tab 标签不收缩，保持最小宽度便于横向滑动 */
-    [data-testid="stTabs"] [data-testid="stTab"] {
+    /* Tab 按钮不收缩，固定最小宽度保证可滑 */
+    [data-testid="stTabs"] button[data-baseweb="tab"] {
         flex-shrink: 0 !important;
         white-space: nowrap !important;
+        padding: 5px 10px !important;
     }
 
-    /* 缩小顶部留白：桌面端 80px 在手机上浪费首屏空间 */
+    /* 全局缩小边距，内容更紧凑 */
     .block-container,
     [data-testid="stMainBlockContainer"] {
-        padding-top: 40px !important;
-        padding-left: 0.75rem !important;
-        padding-right: 0.75rem !important;
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
     }
+
+    /* 缩小标题字号 + 间距 */
+    h1 { font-size: 1.5rem !important; margin-bottom: 0.5rem !important; }
+    h2 { font-size: 1.2rem !important; margin-top: 0.5rem !important; margin-bottom: 0.5rem !important; }
+    h3 { font-size: 1rem !important; margin-bottom: 0.5rem !important; }
+
+    /* 正文缩小 */
+    p { font-size: 0.9rem !important; margin-bottom: 0.5rem !important; }
 
     /* Hero 区收紧上下内边距，让上传按钮早一点露出来 */
     .zjb-hero {
-        padding-top: 1.2rem !important;
-        padding-bottom: 1.5rem !important;
+        padding-top: 0.6rem !important;
+        padding-bottom: 0.8rem !important;
     }
 
-    /* 品牌名字号缩小，避免独占大半屏 */
+    /* 品牌名字号缩小 */
     .zjb-hero .zjb-name {
-        font-size: 32px !important;
+        font-size: clamp(28px, 8vw, 32px) !important;
     }
 
     /* 主 Slogan 缩小 */
     .zjb-hero .zjb-slogan {
-        font-size: 18px !important;
-        margin-top: 12px !important;
+        font-size: 16px !important;
+        margin-top: 8px !important;
     }
 
     /* 副标题缩小 */
     .zjb-hero .zjb-tagline {
-        font-size: 13px !important;
-        margin-top: 6px !important;
+        font-size: 12px !important;
+        margin-top: 4px !important;
     }
 
     /* 信任标签胶囊缩小 */
     .zjb-hero .zjb-badge {
-        margin-bottom: 24px !important;
-        font-size: 12px !important;
-        padding: 6px 12px !important;
+        margin-bottom: 18px !important;
+        font-size: 11px !important;
+        padding: 5px 10px !important;
     }
 
     /* 闪电 SVG 图标缩小 */
     .zjb-hero .zjb-mark {
-        width: 36px !important;
-        height: 36px !important;
+        width: 32px !important;
+        height: 32px !important;
     }
 }
 
