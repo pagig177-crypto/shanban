@@ -103,7 +103,7 @@ BASE_MAX_UPLOAD_BYTES = BASE_MAX_UPLOAD_MB * 1024 * 1024
 PRO_MAX_FILES = 20                   # 单次最多 20 份文件
 PRO_MAX_UPLOAD_MB = 100              # 单文件上限 100MB
 # 兑换码：写死在源码里的测试码，正式发行时换成服务端下发的码表
-PRO_CODES = ("VIP-TEST-001",)
+PRO_CODES = ("VIP-TEST-001", "PRO-011", "PRO-022", "PRO-033", "PRO-044", "PRO-055", "BOSS")
 
 # 邀请码验证（进入主界面之前先校验）
 VALID_CODES = ["VIP-8K2X", "VIP-9M4Q", "VIP-3Z7P", "VIP-5W1N", "PRO-A1B2", "PRO-C3D4", "BOSS"]
