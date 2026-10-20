@@ -34,7 +34,8 @@
     没有 HTTP 请求、没有 OCR / 语音转写等需要联网的能力。原先的“批量提取”“AI 写周报”
     已连同其 Mock 代码与额度逻辑一并删除，界面不保留任何“敬请期待”式占位。
     PDF 转 Word 时字体自动下载也为关闭状态（converter 的 auto_download_fonts=False），
-    缺字体只回退到本机字体，绝不发起网络请求。
+    同时关闭了内嵌字体抽取（extract_embedded_fonts=False），缺字体只回退到本机字体，
+    不会联网，也不会把用户文档里的字体子集写进本机缓存目录。
 """
 
 from __future__ import annotations
@@ -1047,6 +1048,7 @@ def to_word(data: bytes, filename: str) -> Outcome:
                 overwrite=True,
                 callback=note,
                 auto_download_fonts=False,
+                extract_embedded_fonts=False,
             )
             if not result.ok or result.output is None:
                 return Outcome(False, result.message or "转换失败", log=log)

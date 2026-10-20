@@ -423,8 +423,13 @@ def resolve_fonts(
     auto_download: bool = False,
     callback: ProgressCallback | None = None,
     index: dict[str, Path] | None = None,
+    extract_embedded: bool = True,
 ) -> FontReport:
-    """为每种 PDF 字体确定 Word 字体名与字体文件（下载失败会自动兜底）。"""
+    """为每种 PDF 字体确定 Word 字体名与字体文件（下载失败会自动兜底）。
+
+    extract_embedded=False 时跳过「从 PDF 抽出内嵌字体并写入缓存目录」这一步，
+    用于「文件不留存」场景：不把用户文档里的字体字符集落盘。
+    """
     report = FontReport(records=records)
     table = index
 
@@ -445,8 +450,8 @@ def resolve_fonts(
             )
             continue
 
-        # 2) PDF 内嵌字体
-        embedded = _extract_embedded(record, pdf_path)
+        # 2) PDF 内嵌字体（可关闭：避免把用户文档的字体子集写进本机缓存）
+        embedded = _extract_embedded(record, pdf_path) if extract_embedded else None
         if embedded is not None:
             report.resolved[record.pdf_name] = ResolvedFont(
                 record.pdf_name, record.base_name, "embedded", embedded,

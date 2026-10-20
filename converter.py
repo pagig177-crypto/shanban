@@ -224,12 +224,15 @@ def convert_pdf(
     *,
     detect_fonts: bool = True,
     auto_download_fonts: bool = False,
+    extract_embedded_fonts: bool = True,
 ) -> ConversionResult:
     """Convert a single PDF to .docx, with automatic fallback.
 
     Args:
         detect_fonts: 识别 PDF 使用的字体并应用到输出文档的默认样式。
-        auto_download_fonts: 本机缺失字体时自动下载开源替代字体。
+        auto_download_fonts: 本机缺失字体时自动下载开源替代字体（会联网）。
+        extract_embedded_fonts: 是否把 PDF 内嵌字体抽到本机缓存目录复用。
+            设为 False 可确保不把用户文档的字体子集落盘（「文件不留存」）。
     """
     src_path = Path(src).expanduser().resolve()
     result = ConversionResult(source=src_path)
@@ -262,6 +265,7 @@ def convert_pdf(
                 records, src_path,
                 auto_download=auto_download_fonts,
                 callback=callback,
+                extract_embedded=extract_embedded_fonts,
             )
             result.font_report = font_report
             for record in records:

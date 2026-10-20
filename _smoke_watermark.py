@@ -86,8 +86,38 @@ def check_region() -> None:
     check("旧品牌已清除", not any("职接办" in text for text in texts))
 
 
+def check_no_disk_trace() -> None:
+    """「文件不留存」守卫：PDF 转 Word 不得把用户文档的内嵌字体写进本机缓存。"""
+    print("\n[2] 文件不留存（不把用户文档内容落盘）")
+    import glob
+    import shutil
+    import tempfile
+
+    import fonts
+
+    cache = fonts.CACHE_DIR
+    shutil.rmtree(cache, ignore_errors=True)
+    check("起点：字体缓存目录已清空", not cache.exists())
+
+    with open("示例-中文报告.pdf", "rb") as handle:
+        payload = handle.read()
+    outcome = app_module.to_word(payload, "示例-中文报告.pdf")
+    check("带内嵌字体的 PDF 转换成功", outcome.ok, outcome.message)
+
+    left = sorted(path.name for path in cache.glob("*")) if cache.exists() else []
+    check("转换后字体缓存目录仍为空（无用户文档字体落盘）", not left, str(left))
+
+    prefix = ("zjb_compress_", "zjb_word_", "zjb_replace_", "pdf2word-", "pdf_replace_")
+    stale = [
+        path for pattern in prefix
+        for path in glob.glob(f"{tempfile.gettempdir()}/{pattern}*")
+    ]
+    check("无遗留的项目临时目录", not stale, str(stale))
+
+
 def main() -> None:
     check_region()
+    check_no_disk_trace()
     print()
     if FAILED:
         print("❌ 未通过：" + "；".join(FAILED))
