@@ -169,6 +169,77 @@ CUSTOM_CSS = """
     --zjb-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 8px 24px rgba(16, 24, 40, .05);
     --zjb-shadow-lift: 0 2px 4px rgba(16, 24, 40, .05), 0 16px 36px rgba(16, 24, 40, .09);
 }
+/* ============================================================
+    0.5 移动端适配：768px 以下不换行横向滑动导航栏、压缩顶部留白
+   ============================================================ */
+@media (max-width: 768px) {
+    /* 强制导航栏横向滑动：不换行，超出屏幕可滑动 */
+    [data-testid="stTabs"] [role="tablist"],
+    .stTabs [role="tablist"] {
+        white-space: nowrap !important;
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;           /* Firefox */
+        -ms-overflow-style: none;        /* IE / Edge */
+    }
+    [data-testid="stTabs"] [role="tablist"]::-webkit-scrollbar,
+    .stTabs [role="tablist"]::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+    }
+
+    /* Tab 标签不收缩，保持最小宽度便于横向滑动 */
+    [data-testid="stTabs"] [data-testid="stTab"] {
+        flex-shrink: 0 !important;
+        white-space: nowrap !important;
+    }
+
+    /* 缩小顶部留白：桌面端 80px 在手机上浪费首屏空间 */
+    .block-container,
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 40px !important;
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+    }
+
+    /* Hero 区收紧上下内边距，让上传按钮早一点露出来 */
+    .zjb-hero {
+        padding-top: 1.2rem !important;
+        padding-bottom: 1.5rem !important;
+    }
+
+    /* 品牌名字号缩小，避免独占大半屏 */
+    .zjb-hero .zjb-name {
+        font-size: 32px !important;
+    }
+
+    /* 主 Slogan 缩小 */
+    .zjb-hero .zjb-slogan {
+        font-size: 18px !important;
+        margin-top: 12px !important;
+    }
+
+    /* 副标题缩小 */
+    .zjb-hero .zjb-tagline {
+        font-size: 13px !important;
+        margin-top: 6px !important;
+    }
+
+    /* 信任标签胶囊缩小 */
+    .zjb-hero .zjb-badge {
+        margin-bottom: 24px !important;
+        font-size: 12px !important;
+        padding: 6px 12px !important;
+    }
+
+    /* 闪电 SVG 图标缩小 */
+    .zjb-hero .zjb-mark {
+        width: 36px !important;
+        height: 36px !important;
+    }
+}
 
 /* ============================================================
    1. 全局：背景、居中容器、隐藏原生 Header / 菜单 / 页脚
