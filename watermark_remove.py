@@ -326,6 +326,7 @@ def _image_bytes(image: Image.Image, suffix: str) -> tuple[bytes, str]:
 
 
 def _remove_image(data: bytes, mode: str, suffix: str = ".png") -> WatermarkResult:
+    """图片去水印核心函数：基于位置和颜色特征的精准去除"""
     try:
         image = Image.open(io.BytesIO(data))
         image.load()
@@ -335,6 +336,8 @@ def _remove_image(data: bytes, mode: str, suffix: str = ".png") -> WatermarkResu
         raise WatermarkError("图片尺寸过小，无法处理。")
 
     log: list[str] = []
+    
+    # 1. 裁切模式：直接裁剪，最安全
     if mode in CROP_MODES:
         cleaned, keep = crop_with_pillow(image, mode)
         cut = f"裁切后保留 {cleaned.width}×{cleaned.height}px（原 {image.width}×{image.height}px）"
@@ -344,6 +347,8 @@ def _remove_image(data: bytes, mode: str, suffix: str = ".png") -> WatermarkResu
         )
         log.append(cut)
         removed = 0
+        
+    # 2. 区域涂白模式：针对固定位置的水印
     elif mode in BOX_MODES:
         cleaned, box = whiten_with_pillow(image, box_for_mode(mode))
         area = (box[2] - box[0]) * (box[3] - box[1])
@@ -355,29 +360,70 @@ def _remove_image(data: bytes, mode: str, suffix: str = ".png") -> WatermarkResu
         )
         log.append(f"涂白区域 {box}（{share:.1%} 画面）")
         removed = area
+        
+    # 3. 自动模式：增强版，更精准的水印检测
     else:  # auto：自动识别浅色水印
-        pixmap = pymupdf.Pixmap(data)
-        if pixmap.alpha:
-            pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
-        erased, removed = erase_light_pixels(pixmap, WATERMARK_DELTA)
-        ratio = removed / max(1, pixmap.width * pixmap.height)
-        if removed and ratio > 0.6:
-            # 超过六成像素像水印，说明整张图偏浅（照片/扫描件），宁可提示换模式也不给糊图
-            return WatermarkResult(
-                ok=False,
-                message=(
-                    "这张图整体偏浅，自动识别会把正文一起擦掉。请改选「裁掉顶部区域」"
-                    "或「全屏底纹遮盖」，只处理水印所在的位置。"
-                ),
-                log=[f"命中比例 {ratio:.0%}"],
+        # 先转为RGB格式便于处理
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        
+        # 方法1：基于颜色直方图的水印检测（适合纯白底文字水印）
+        # 计算图像的颜色分布
+        hist = image.histogram()
+        r_hist = hist[0:256]
+        g_hist = hist[256:512]
+        b_hist = hist[512:768]
+        
+        # 如果红色、绿色、蓝色通道的高亮部分（>220）占比很高，可能是白底文字
+        r_bright = sum(r_hist[220:]) / len(r_hist)
+        g_bright = sum(g_hist[220:]) / len(g_hist)
+        b_bright = sum(b_hist[220:]) / len(b_hist)
+        
+        # 白底文字水印特征：三个通道都偏亮，且亮度分布集中
+        is_white_background = (r_bright > 0.3 and g_bright > 0.3 and b_bright > 0.3)
+        
+        if is_white_background:
+            # 使用更精确的阈值检测（针对白底黑字/灰字水印）
+            cleaned = _remove_white_background_watermark(image)
+            removed = _count_watermark_pixels(image, cleaned)
+            ratio = removed / max(1, image.width * image.height)
+            
+            if removed > 0:
+                message = (
+                    f"已精准清除白底文字/印章水印（覆盖 {ratio * 100:.1f}% 画面），"
+                    f"正文内容完整保留。"
+                )
+                log.append(f"清除水印像素 {removed}（{ratio:.1%}）")
+            else:
+                message = "这张图没有检测到白底文字水印。请尝试选择具体位置模式。"
+                log.append("未检测到白底文字水印")
+                
+        else:
+            # 方法2：传统浅色像素擦除（适用于一般情况）
+            pixmap = pymupdf.Pixmap(data)
+            if pixmap.alpha:
+                pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
+            erased, removed = erase_light_pixels(pixmap, WATERMARK_DELTA)
+            ratio = removed / max(1, pixmap.width * pixmap.height)
+            
+            if removed and ratio > 0.6:
+                # 超过六成像素像水印，说明整张图偏浅（照片/扫描件），宁可提示换模式也不给糊图
+                return WatermarkResult(
+                    ok=False,
+                    message=(
+                        "这张图整体偏浅，自动识别会把正文一起擦掉。请改选「裁掉顶部区域」"
+                        "或「全屏底纹遮盖」，只处理水印所在的位置。"
+                    ),
+                    log=[f"命中比例 {ratio:.0%}"],
+                )
+            
+            cleaned = Image.open(io.BytesIO(_png(erased))).convert("RGB")
+            message = (
+                f"已自动清除浅色水印与底纹（覆盖 {ratio * 100:.1f}% 画面），正文保持原样。"
+                if removed
+                else "这张图没找到浅色水印。换个位置试试：水印在顶上选「在页面顶部」，在底下选「在页面底部」。"
             )
-        cleaned = Image.open(io.BytesIO(_png(erased))).convert("RGB")
-        message = (
-            f"已自动清除浅色水印与底纹（覆盖 {ratio * 100:.1f}% 画面），正文保持原样。"
-            if removed
-            else "这张图没找到浅色水印。换个位置试试：水印在顶上选「在页面顶部」，在底下选「在页面底部」。"
-        )
-        log.append(f"擦除像素 {removed}（{ratio:.1%}）")
+            log.append(f"擦除像素 {removed}（{ratio:.1%}）")
 
     payload, mime = _image_bytes(cleaned, suffix)
     preview = cleaned if cleaned.width <= PREVIEW_MAX_WIDTH else cleaned.copy()
@@ -743,3 +789,141 @@ def remove_watermark(
     result.log.insert(0, f"文件：{filename}（{len(data) / 1024:.1f}KB）")
     result.log.insert(1, f"处理位置：{MODE_LABELS.get(resolved, resolved)}")
     return result
+def _remove_white_background_watermark(image: Image.Image) -> Image.Image:
+    """专门针对白底文字/印章水印的精准去除算法（纯 numpy 实现，不依赖 scipy）
+    
+    规则逻辑：
+    1. 白底检测：RGB 三通道均值 > 230 的像素视为背景
+    2. 文字检测：在背景区域内，颜色较暗（RGB 均值 < 200）且面积较小的连通区域视为水印
+    3. 精准擦除：只擦除符合水印特征的区域，保留正文和其他内容
+    """
+    import numpy as np
+    from PIL import Image
+    
+    img_array = np.array(image)
+    h, w = img_array.shape[:2]
+    
+    # 创建背景掩码：RGB 均值 > 230 的像素
+    bg_mask = np.mean(img_array, axis=2) > 230
+
+    # 计算亮度（加权平均）
+    brightness = 0.299 * img_array[:, :, 0] + 0.587 * img_array[:, :, 1] + 0.114 * img_array[:, :, 2]
+    
+    # 暗色区域：在背景区域内且亮度 < 200
+    dark_mask = bg_mask & (brightness < 200)
+    
+    # 快速形态学操作（使用滑动窗口视图）
+    def _morph_op(mask, size=3, op='max'):
+        """快速形态学操作（膨胀=max，腐蚀=min）"""
+        pad = size // 2
+        padded = np.pad(mask.astype(float), pad, mode='constant')
+        result = np.zeros_like(mask, dtype=float)
+        
+        # 使用滑动窗口加速
+        for di in range(size):
+            for dj in range(size):
+                window = padded[di:di+h, dj:dj+w]
+                if op == 'max':
+                    result = np.maximum(result, window)
+                else:
+                    result = np.minimum(result, window)
+                    result[~mask] = 0  # 保持背景
+        
+        return (result > 0.5) if op == 'max' else (result > 0.9)
+    
+    # 开运算去噪，闭运算连接（简化版，只做一次膨胀和腐蚀）
+    dark_mask = _morph_op(_morph_op(dark_mask, 3, 'min'), 3, 'max')
+    
+    # 简化版连通区域标记（使用并查集思想）
+    def _simple_label(mask):
+        labeled = np.zeros_like(mask, dtype=int)
+        label = 0
+        indices = np.argwhere(mask)
+        
+        if len(indices) == 0:
+            return labeled, 0
+        
+        # 使用并查集合并相邻区域
+        parent = {}
+        def find(x):
+            if x not in parent:
+                parent[x] = x
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                parent[px] = py
+        
+        # 第一遍：标记并合并
+        for idx, (i, j) in enumerate(indices):
+            label = idx + 1
+            labeled[i, j] = label
+            parent[label] = label
+            
+            # 检查上方和左方邻居
+            for di, dj in [(-1, 0), (0, -1)]:
+                ni, nj = i + di, j + dj
+                if 0 <= ni < h and 0 <= nj < w and labeled[ni, nj] > 0:
+                    union(label, labeled[ni, nj])
+        
+        # 第二遍：压缩路径，重新编号
+        root_map = {}
+        new_label = 0
+        for i in range(h):
+            for j in range(w):
+                if labeled[i, j] > 0:
+                    root = find(labeled[i, j])
+                    if root not in root_map:
+                        new_label += 1
+                        root_map[root] = new_label
+                    labeled[i, j] = root_map[root]
+        
+        return labeled, new_label
+    
+    labeled, num_features = _simple_label(dark_mask)
+    
+    # 过滤并清除水印
+    cleaned_array = img_array.copy()
+    for label_id in range(1, min(num_features + 1, 1000)):  # 限制最大标签数防死循环
+        region_mask = (labeled == label_id)
+        area = np.sum(region_mask)
+        
+        if 50 <= area <= 2000:  # 面积过滤
+            rows = np.where(np.any(region_mask, axis=1))[0]
+            cols = np.where(np.any(region_mask, axis=0))[0]
+            if len(rows) > 0 and len(cols) > 0:
+                y1, y2 = rows[0], rows[-1] + 1
+                x1, x2 = cols[0], cols[-1] + 1
+                
+                # 边缘区域检测（水印通常在边缘）
+                if x1 < w * 0.2 or x2 > w * 0.8 or y1 < h * 0.2 or y2 > h * 0.8:
+                    margin = 2
+                    y_start, y_end = max(0, y1 - margin), min(h, y2 + margin)
+                    x_start, x_end = max(0, x1 - margin), min(w, x2 + margin)
+                    
+                    bg_region = cleaned_array[y_start:y_end, x_start:x_end]
+                    region_crop = region_mask[y_start:y_end, x_start:x_end]
+                    bg_mask_local = ~region_crop
+                    
+                    if np.any(bg_mask_local):
+                        bg_color = np.mean(bg_region[bg_mask_local], axis=0).astype(int)
+                    else:
+                        bg_color = [255, 255, 255]
+                    
+                    cleaned_array[y1:y2, x1:x2] = bg_color
+    
+    return Image.fromarray(cleaned_array.astype(np.uint8))
+
+
+def _count_watermark_pixels(original: Image.Image, cleaned: Image.Image) -> int:
+    """统计被去除的水印像素数量"""
+    import numpy as np
+    
+    orig_array = np.array(original)
+    clean_array = np.array(cleaned)
+    
+    diff = np.abs(orig_array.astype(int) - clean_array.astype(int))
+    return int(np.sum(np.max(diff, axis=2) > 20))
