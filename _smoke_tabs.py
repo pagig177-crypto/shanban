@@ -38,7 +38,9 @@ def find(app: AppTest, kind: str, key: str):
 
 
 def check_tabs() -> AppTest:
-    app = AppTest.from_file("app.py", default_timeout=180).run()
+    app = AppTest.from_file("app.py", default_timeout=180)
+    app.session_state["verified"] = True
+    app.run()
     assert not app.exception, app.exception
 
     tabs = [block.label for block in app.get("tabs")]

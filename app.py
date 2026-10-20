@@ -102,6 +102,9 @@ PRO_MAX_UPLOAD_MB = 100              # 单文件上限 100MB
 # 兑换码：写死在源码里的测试码，正式发行时换成服务端下发的码表
 PRO_CODES = ("VIP-TEST-001",)
 
+# 邀请码验证（进入主界面之前先校验）
+VALID_CODES = ["VIP-001", "VIP-002", "XHS-001", "WX-001", "FRIEND-01"]
+
 # 拦截时的两条提示（一字不改：红色额度说明 + 蓝色解锁指引）
 LIMIT_MESSAGE = (
     f"⚠️ 单次最多处理 {BASE_MAX_FILES} 份文件，且单文件不能超过 "
@@ -133,6 +136,9 @@ DRAGZONE_TIP_DOC = f"支持格式：Word/Excel/PPT/图片，单文件最大 {BAS
 
 # 侧边栏输入的 Pro 兑换码存放位置（每次判断都重新校验，清掉即恢复限制）
 PRO_CODE_KEY = "pro_code"
+
+# 邀请码验证通过标记（session key）
+VERIFY_KEY = "verified"
 
 COMPRESS_LEVELS = {
     "无损压缩（推荐，画质与版式不变）": False,
@@ -3000,6 +3006,24 @@ def main() -> None:
     # 字体 + 主题样式
     st.markdown(FONT_LINKS, unsafe_allow_html=True)
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+    # ── 内测邀请码验证守卫 ──
+    if not st.session_state.get(VERIFY_KEY):
+        st.markdown(
+            f"<h1 style='text-align:center;margin-top:60px;'>⚡️ {APP_NAME}</h1>"
+            f"<p style='text-align:center;color:#6b7280;'>{APP_CLAIM}</p>",
+            unsafe_allow_html=True,
+        )
+        code = st.text_input("请输入内测邀请码", placeholder="VIP-001 / XHS-001 …", key="invite_input")
+        if st.button("进入", key="invite_btn", use_container_width=True):
+            normalized = (code or "").strip().upper()
+            if normalized in VALID_CODES:
+                st.session_state[VERIFY_KEY] = True
+                st.rerun()
+            else:
+                st.error("邀请码无效，请前往闲鱼/小红书私信获取")
+        st.stop()
+
     render_sidebar()
     render_header()
 

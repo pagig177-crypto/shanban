@@ -26,6 +26,14 @@ MEM = 1024 * 1024
 FAILED: list[str] = []
 
 
+def _new_app() -> AppTest:
+    """创建带已验证 session 的 AppTest，跳过内测邀请码守卫。"""
+    at = AppTest.from_file("app.py", default_timeout=180)
+    at.session_state["verified"] = True
+    at.run()
+    return at
+
+
 def check(name: str, condition: bool, detail: str = "") -> None:
     print(("  ✅ " if condition else "  ❌ ") + name + (f"  [{detail}]" if detail and not condition else ""))
     if not condition:
