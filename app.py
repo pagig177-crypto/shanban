@@ -726,30 +726,20 @@ header[data-testid="stHeader"] {
 }
 [data-testid="stCheckbox"] > [data-testid="stRadioGroup"],
 [data-testid="stRadio"] > [data-testid="stRadioGroup"] {width: 100% !important;}
-/* 复选框方框：圆角 + 深蓝选中态（新旧两套 DOM 都覆盖；当前界面未用到 st.checkbox） */
-[data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"],
-[data-testid="stCheckbox"] [data-testid="stCheckboxRootElement"] {
-    border-radius: 6px !important;
-    border-color: #C7D0DD !important;
-}
-[data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"],
-[data-testid="stCheckbox"] [data-selected] [data-testid="stCheckboxRootElement"] {
-    background-color: #10B981 !important;  /* 绿色 */
-    border-color: #10B981 !important;
-}
-[data-testid="stCheckbox"] [data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"] svg,
-[data-testid="stCheckbox"] [data-selected] [data-testid="stCheckboxRootElement"] svg {
-    color: white !important;
-}
-/* 强制修改原生 checkbox 的颜色 */
-label[data-baseweb="checkbox"] span {
-    background-color: #10B981 !important; /* 选中时的绿色 */
-    border-color: #10B981 !important;
-}
-/* 未选中时的边框改成灰色 */
-label[data-baseweb="checkbox"] span[aria-checked="false"] {
+/* ============================================================
+   Checkbox：灰框 → 绿框 + 白勾（终极版）
+   ============================================================ */
+div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] div[role="checkbox"] {
     background-color: transparent !important;
-    border-color: #D1D5DB !important;
+    border: 2px solid #D1D5DB !important;
+}
+div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"] {
+    background-color: #10B981 !important;
+    border: 2px solid #10B981 !important;
+}
+div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] svg {
+    fill: #FFFFFF !important;
+    color: #FFFFFF !important;
 }
 /* 单选项（压缩模式）横向居中排布：新版 DOM 是 [data-testid="stRadioGroup"] > div > label */
 [data-testid="stRadio"] [role="radiogroup"],
