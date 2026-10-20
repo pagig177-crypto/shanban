@@ -129,7 +129,7 @@ def check_ui() -> None:
 
     # 批量页
     labels = [d.label for d in app.get("download_button")]
-    assert any("Excel 示例" in label for label in labels)
+    assert any("Excel 名单示例" in label for label in labels)
     assert any("PDF 模板示例" in label for label in labels)
     find("button", "batch_preview_btn").click().run()
     assert any("请先上传名单" in w.value for w in app.warning), [w.value for w in app.warning]

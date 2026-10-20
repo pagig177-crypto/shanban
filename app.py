@@ -2413,7 +2413,7 @@ def _sample_bytes(kind: str) -> bytes:
 def sample_download(kind: str, filename: str, mime: str, key: str) -> None:
     """“下载示例文件”按钮：有真实文件才渲染按钮，生成失败时给出中文提示而不是空按钮。"""
     payload = _sample_bytes(kind)
-    label = "📥 下载 Excel 示例" if kind == "excel" else "📥 下载 PDF 模板示例"
+    label = "📥 下载 Excel 名单示例" if kind == "excel" else "📥 下载 PDF 模板示例"
     if not payload:
         st.button(
             label,
