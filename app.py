@@ -2545,8 +2545,8 @@ def render_basic() -> None:
     # ---- PDF 转 Word ----
     with tab_word:
         with card("word"):
-            files = pdf_uploader("上传需要转换的 PDF", "basic_word_upload")
-            st.caption("转出来的 Word 和原来长得一样；如果是照片或扫描件，暂时认不出上面的字。")
+            files = pdf_uploader("上传需要转换的 PDF", "basic_word_upload", multiple=True)
+            st.caption("支持批量上传，处理后自动打包为 ZIP。转出来的 Word 和原来长得一样；如果是照片或扫描件，暂时认不出上面的字。")
             if st.button(
                 "开始转换",
                 type="primary",
@@ -2557,12 +2557,37 @@ def render_basic() -> None:
                 if not files:
                     st.warning("请先上传一个 PDF 文件。")
                 else:
-                    file = files[0]
-
                     def _do_word() -> None:
-                        with st.spinner("正在按原样转成 Word…"):
-                            outcome = to_word(file.getvalue(), file.name)
-                        show_result(outcome, "basic_word")
+                        outcomes = []
+                        for file in files:
+                            with st.spinner(f"正在按原样转成 Word… ({file.name})"):
+                                outcome = to_word(file.getvalue(), file.name)
+                                outcomes.append(outcome)
+                        
+                        # 如果只有一个文件，直接显示结果
+                        if len(outcomes) == 1:
+                            show_result(outcomes[0], "basic_word")
+                        else:
+                            # 如果有多个文件，打包成 ZIP
+                            payouts = []
+                            for outcome in outcomes:
+                                if outcome.data is not None:
+                                    payouts.append((outcome.filename, outcome.data))
+                            
+                            if payouts:
+                                zip_bytes = _zip_bytes(payouts)
+                                st.success(f"批量转换完成，共 {len(payouts)} 个文件")
+                                st.download_button(
+                                    "📥 下载全部转换结果（ZIP）",
+                                    data=zip_bytes,
+                                    file_name="PDF转Word结果.zip",
+                                    mime="application/zip",
+                                    type="primary",
+                                    key="download_zip_word",
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.warning("没有成功转换的文件。")
 
                     run_quota_task("word", _do_word)
 
