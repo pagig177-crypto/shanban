@@ -714,34 +714,9 @@ header[data-testid="stHeader"] {
 }
 
 /* ============================================================
-   7. 复选框 / 单选框：整齐居中、深蓝选中
-   ============================================================ */
-[data-testid="stCheckbox"],
-[data-testid="stRadio"] {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
-    justify-content: flex-start !important;
-    width: 100% !important;
-}
-[data-testid="stCheckbox"] > [data-testid="stRadioGroup"],
-[data-testid="stRadio"] > [data-testid="stRadioGroup"] {width: 100% !important;}
 /* ============================================================
-   Checkbox：灰框 → 绿框 + 白勾（终极版）
+   Radio：横向居中排布
    ============================================================ */
-div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] div[role="checkbox"] {
-    background-color: transparent !important;
-    border: 2px solid #D1D5DB !important;
-}
-div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] div[role="checkbox"][aria-checked="true"] {
-    background-color: #10B981 !important;
-    border: 2px solid #10B981 !important;
-}
-div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] svg {
-    fill: #FFFFFF !important;
-    color: #FFFFFF !important;
-}
-/* 单选项（压缩模式）横向居中排布：新版 DOM 是 [data-testid="stRadioGroup"] > div > label */
 [data-testid="stRadio"] [role="radiogroup"],
 [data-testid="stRadioGroup"] {
     display: flex !important;
@@ -755,9 +730,8 @@ div[data-testid="stCheckbox"] div[data-baseweb="checkbox"] svg {
     flex: 1 1 auto !important;
 }
 [data-testid="stRadioGroup"] > div > label {max-width: 100%;}
-/* 单选/复选的标题单独占一行，选项组整体居中 */
-[data-testid="stRadio"] > label[data-testid="stWidgetLabel"],
-[data-testid="stCheckbox"] > label[data-testid="stWidgetLabel"] {
+/* 单选框标题占一行 */
+[data-testid="stRadio"] > label[data-testid="stWidgetLabel"] {
     display: block !important;
     width: 100% !important;
     margin: 0 0 .5rem 0 !important;
@@ -3309,12 +3283,7 @@ def render_replace() -> None:
         if filled:
             st.caption(f"已填 {filled} 条替换规则。")
 
-        replace_all = st.checkbox(
-            "全部替换",
-            value=True,
-            key="replace_all",
-            help="勾上：全文每一处都改；取消：只改第一处。",
-        )
+        replace_all = st.toggle("全部替换", value=True, key="replace_all_toggle")
 
         region: tuple[float, float, float, float] | None = None
         if is_image and file is not None:
