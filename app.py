@@ -42,11 +42,14 @@ from __future__ import annotations
 
 import html as html_lib
 import json
+import os
 import re
 import tempfile
+import threading
 import traceback
 import zipfile
 from dataclasses import dataclass
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -104,6 +107,22 @@ PRO_CODES = ("VIP-TEST-001",)
 
 # 邀请码验证（进入主界面之前先校验）
 VALID_CODES = ["VIP-8K2X", "VIP-9M4Q", "VIP-3Z7P", "VIP-5W1N", "PRO-A1B2", "PRO-C3D4", "BOSS"]
+
+# ==========================================================================
+# 商业限流：VIP 每天 5 次，PRO / BOSS 不限次
+# ==========================================================================
+VIP_DAILY_LIMIT = 5                  # VIP 邀请码每天可成功处理 5 次
+VIP_LOW_QUOTA_THRESHOLD = 2          # 剩余 <= 2 次时开始显示升级提示
+INVITE_CODE_KEY = "invite_code"      # 当前会话使用的邀请码（验证通过后写入）
+QUOTA_PENDING_KEY = "zjb_quota_pending"   # 本轮任务预占的邀请码
+QUOTA_SUCCESS_KEY = "zjb_quota_success"   # 本轮任务是否成功产出文件
+
+# 计数落盘位置：默认是项目根目录的 daily_usage.json。
+# 刷新页面 / 清浏览器缓存都不会删掉它；SHANBAN_USAGE_FILE 仅用于测试隔离。
+USAGE_FILE = Path(
+    os.environ.get("SHANBAN_USAGE_FILE") or Path(__file__).with_name("daily_usage.json")
+)
+_USAGE_LOCK = threading.RLock()
 
 # 拦截时的两条提示（一字不改：红色额度说明 + 蓝色解锁指引）
 LIMIT_MESSAGE = (
@@ -1877,6 +1896,172 @@ def enforce_upload_limits(files: Sequence[Any], *, strict: bool = True) -> bool:
 
 
 # --------------------------------------------------------------------------
+# 商业限流：每日额度（按日期 + 邀请码持久化到 daily_usage.json）
+# --------------------------------------------------------------------------
+def _normalize_invite_code(code: Any) -> str:
+    """邀请码统一大写、去空白，与登录校验保持同一口径。"""
+    return str(code or "").strip().upper()
+
+
+def current_invite_code() -> str:
+    """当前会话验证通过的邀请码（未登录时为空串）。"""
+    return _normalize_invite_code(st.session_state.get(INVITE_CODE_KEY))
+
+
+def quota_limit_for(code: str | None = None) -> int | None:
+    """返回该邀请码的每日次数上限；None = 不限次数。
+
+    规则：VIP 开头每天 5 次；BOSS / PRO 开头不限次数（其余有效码同样不限）。
+    """
+    normalized = _normalize_invite_code(code if code is not None else current_invite_code())
+    if normalized.startswith("VIP"):
+        return VIP_DAILY_LIMIT
+    return None
+
+
+def _usage_today() -> str:
+    """本地日期（服务器时区），作为计数文件的日期键。"""
+    return date.today().isoformat()
+
+
+def _read_usage() -> dict[str, dict[str, int]]:
+    """读取 daily_usage.json：{"2026-10-20": {"VIP-8K2X": 2}, ...}。
+
+    文件不存在、损坏或格式不对时返回空字典；调用方按“今天还没用过”处理。
+    """
+    if not USAGE_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    usage: dict[str, dict[str, int]] = {}
+    for day, counts in raw.items():
+        if not isinstance(day, str) or not isinstance(counts, dict):
+            continue
+        clean: dict[str, int] = {}
+        for code, value in counts.items():
+            if not isinstance(code, str):
+                continue
+            try:
+                used = int(value)
+            except (TypeError, ValueError):
+                continue
+            if used > 0:
+                clean[_normalize_invite_code(code)] = used
+        usage[day] = clean
+    return usage
+
+
+def _write_usage(usage: dict[str, dict[str, int]]) -> None:
+    """原子写盘：先写临时文件再 os.replace，避免半截 JSON 把计数弄丢。"""
+    USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(usage, ensure_ascii=False, indent=2, sort_keys=True)
+    temp = USAGE_FILE.with_name(
+        f".{USAGE_FILE.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        temp.write_text(payload, encoding="utf-8")
+        os.replace(temp, USAGE_FILE)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _used_today(code: str) -> int:
+    """某个邀请码今天已经成功处理的次数。"""
+    with _USAGE_LOCK:
+        return int(_read_usage().get(_usage_today(), {}).get(code, 0))
+
+
+def vip_remaining(code: str | None = None) -> int | None:
+    """VIP 今日剩余次数；不限次数的码返回 None。"""
+    limit = quota_limit_for(code)
+    if limit is None:
+        return None
+    normalized = _normalize_invite_code(code if code is not None else current_invite_code())
+    return max(0, limit - _used_today(normalized))
+
+
+def vip_quota_available() -> bool:
+    """当前邀请码是否还能开始一次处理（不限次数的码永远为 True）。"""
+    remaining = vip_remaining()
+    return remaining is None or remaining > 0
+
+
+def reserve_vip_use(code: str | None = None) -> bool:
+    """处理开始前预占 1 次额度；额度不足或写盘失败返回 False。
+
+    预占而不是“完成后再写”，是为了防止两个会话同时读到剩余 1 次后都放行。
+    任务失败时由 refund_vip_use() 回退，最终只有成功产出文件才真正计数。
+    """
+    normalized = _normalize_invite_code(code if code is not None else current_invite_code())
+    limit = quota_limit_for(normalized)
+    if limit is None:
+        return True
+    with _USAGE_LOCK:
+        usage = _read_usage()
+        today = usage.setdefault(_usage_today(), {})
+        used = int(today.get(normalized, 0))
+        if used >= limit:
+            return False
+        today[normalized] = used + 1
+        try:
+            _write_usage(usage)
+        except OSError:
+            return False
+    return True
+
+
+def refund_vip_use(code: str | None = None) -> None:
+    """任务失败时退回预占的额度；写盘失败只影响计数，不影响已生成结果。"""
+    normalized = _normalize_invite_code(code if code is not None else current_invite_code())
+    if quota_limit_for(normalized) is None:
+        return
+    with _USAGE_LOCK:
+        usage = _read_usage()
+        today = usage.get(_usage_today(), {})
+        if normalized not in today:
+            return
+        used = max(0, int(today.get(normalized, 0)) - 1)
+        if used:
+            today[normalized] = used
+        else:
+            today.pop(normalized, None)
+        if not today:
+            usage.pop(_usage_today(), None)
+        try:
+            _write_usage(usage)
+        except OSError:
+            pass
+
+
+def mark_quota_success() -> None:
+    """标记本轮任务已经成功产出文件，run_quota_task() 据此不退还预占额度。"""
+    if st.session_state.get(QUOTA_PENDING_KEY):
+        st.session_state[QUOTA_SUCCESS_KEY] = True
+
+
+def show_vip_quota_message(remaining: int) -> None:
+    """VIP 额度提示：剩余不足时用黄色，归零时用红色拦截。"""
+    remaining = max(0, int(remaining))
+    message = f"今日 VIP 额度剩余 {remaining} 次，升级 PRO 版不限次数（联系闲鱼）"
+    if remaining <= 0:
+        st.error(message)
+        st.info("👉 PRO / BOSS 邀请码不限次数；明天 0 点后 VIP 额度自动恢复。")
+    else:
+        st.warning(message)
+
+
+def render_vip_quota_notice() -> None:
+    """页面显眼处的 VIP 剩余额度提示（仅剩余 <= 2 次时出现）。"""
+    remaining = vip_remaining()
+    if remaining is not None and remaining <= VIP_LOW_QUOTA_THRESHOLD:
+        show_vip_quota_message(remaining)
+
+
+# --------------------------------------------------------------------------
 # 界面公共组件
 # --------------------------------------------------------------------------
 def privacy_note() -> None:
@@ -1996,6 +2181,33 @@ def run_task(tag: str, worker: Callable[[], Any]) -> Any:
         st.session_state.pop(BUSY_KEY, None)
 
 
+def run_quota_task(tag: str, worker: Callable[[], Any]) -> Any:
+    """带每日额度预占的任务执行器：成功产出文件才真正消耗 1 次。
+
+    流程：
+        1. 先预占 1 次（写盘完成才放行，防止并发绕过）；
+        2. 交给 run_task() 执行并防连点；
+        3. worker 内部成功产出文件时调用 mark_quota_success()；
+        4. 失败 / 未产出文件 / 被 busy 锁挡住 -> 自动退还预占额度。
+
+    “试看第一份效果”不产出可下载文件，因此仍走 run_task()，不消耗额度。
+    """
+    code = current_invite_code()
+    if not reserve_vip_use(code):
+        show_vip_quota_message(0)
+        return None
+
+    st.session_state[QUOTA_PENDING_KEY] = code
+    st.session_state[QUOTA_SUCCESS_KEY] = False
+    try:
+        return run_task(tag, worker)
+    finally:
+        success = bool(st.session_state.pop(QUOTA_SUCCESS_KEY, False))
+        pending = st.session_state.pop(QUOTA_PENDING_KEY, None)
+        if pending is not None and not success:
+            refund_vip_use(pending)
+
+
 def step_head(title: str, desc: str = "") -> None:
     """卡片顶部的“标题 + 说明”，用于三步式页面（不显示序号）。"""
     st.markdown(
@@ -2074,6 +2286,8 @@ def show_result(outcome: Outcome, key: str) -> None:
         st.warning(outcome.message)
         return
 
+    # 只有真正产出了文件才消耗额度；失败/无结果会在 run_quota_task() 里自动退还
+    mark_quota_success()
     st.success(outcome.message)
     left, right = st.columns([2, 1], vertical_alignment="center")
     with left:
@@ -2326,7 +2540,7 @@ def render_basic() -> None:
                             )
                         show_result(outcome, "basic_compress")
 
-                    run_task("compress", _do_compress)
+                    run_quota_task("compress", _do_compress)
 
     # ---- PDF 转 Word ----
     with tab_word:
@@ -2350,7 +2564,7 @@ def render_basic() -> None:
                             outcome = to_word(file.getvalue(), file.name)
                         show_result(outcome, "basic_word")
 
-                    run_task("word", _do_word)
+                    run_quota_task("word", _do_word)
 
     # ---- PDF 转 Excel（占位） ----
     with tab_excel:
@@ -2418,7 +2632,7 @@ def render_basic() -> None:
                             outcome = merge_pdfs([(f.name, f.getvalue()) for f in files])
                         show_result(outcome, "basic_merge")
 
-                    run_task("merge", _do_merge)
+                    run_quota_task("merge", _do_merge)
 
     # ---- 文档转 PDF ----
     with tab_pdf:
@@ -2451,7 +2665,7 @@ def render_basic() -> None:
                             outcome.message = f"{outcome.message}（源文件 {size_mb:.1f}MB）"
                         show_result(outcome, "basic_to_pdf")
 
-                    run_task("to_pdf", _do_to_pdf)
+                    run_quota_task("to_pdf", _do_to_pdf)
 
 
 # --------------------------------------------------------------------------
@@ -2657,6 +2871,7 @@ def render_replace() -> None:
                     if not result.ok:
                         st.error(result.message)
                     else:
+                        mark_quota_success()
                         st.success(result.message)
                         for warning in result.warnings:
                             st.caption(f"ℹ️ {warning}")
@@ -2672,7 +2887,7 @@ def render_replace() -> None:
                             use_container_width=True,
                         )
 
-                run_task("replace", _do_replace_image)
+                run_quota_task("replace", _do_replace_image)
             else:
 
                 def _do_replace_pdf() -> None:
@@ -2686,7 +2901,7 @@ def render_replace() -> None:
                     )
                     show_result(outcome, "replace")
 
-                run_task("replace", _do_replace_pdf)
+                run_quota_task("replace", _do_replace_pdf)
 
 
 # --------------------------------------------------------------------------
@@ -2844,6 +3059,7 @@ def render_batch() -> None:
                 if not result.ok:
                     st.error(result.message)
                     return
+                mark_quota_success()
                 st.success(result.message)
                 st.download_button(
                     "⬇ 立刻下载全部文件（ZIP）",
@@ -2857,7 +3073,7 @@ def render_batch() -> None:
                 with st.expander("生成明细"):
                     st.code("\n".join(result.log) or "（无）", language="text")
 
-            run_task("batch", _do_batch)
+            run_quota_task("batch", _do_batch)
 
 
 WATERMARK_TYPES = ["png", "jpg", "jpeg", "webp", "pdf", "docx", "pptx"]
@@ -2953,6 +3169,7 @@ def render_watermark() -> None:
                     failed = [(f, r) for f, r in outcomes if not r.ok]
 
                     if succeeded:
+                        mark_quota_success()
                         st.success(f"搞定！{len(succeeded)} 份文件已经去好水印，可以下载了。")
                         for _, result in succeeded:
                             preview_image(result.preview_png, result.filename or "处理结果预览")
@@ -2990,7 +3207,7 @@ def render_watermark() -> None:
                             f"{display_name(getattr(file, 'name', ''), '文件')}：{result.message}"
                         )
 
-                run_task("watermark", _do_watermark)
+                run_quota_task("watermark", _do_watermark)
 
 
 # --------------------------------------------------------------------------
