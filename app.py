@@ -103,7 +103,7 @@ PRO_MAX_UPLOAD_MB = 100              # 单文件上限 100MB
 PRO_CODES = ("VIP-TEST-001",)
 
 # 邀请码验证（进入主界面之前先校验）
-VALID_CODES = ["VIP-001", "VIP-002", "XHS-001", "WX-001", "FRIEND-01"]
+VALID_CODES = ["VIP-8K2X", "VIP-9M4Q", "VIP-3Z7P", "VIP-5W1N", "PRO-A1B2", "PRO-C3D4", "BOSS"]
 
 # 拦截时的两条提示（一字不改：红色额度说明 + 蓝色解锁指引）
 LIMIT_MESSAGE = (
@@ -3014,7 +3014,7 @@ def main() -> None:
             f"<p style='text-align:center;color:#6b7280;'>{APP_CLAIM}</p>",
             unsafe_allow_html=True,
         )
-        code = st.text_input("请输入内测邀请码", placeholder="VIP-001 / XHS-001 …", key="invite_input")
+        code = st.text_input("请输入内测邀请码", placeholder="请输入您的 VIP / PRO 专属内测码", key="invite_input")
         if st.button("进入", key="invite_btn", use_container_width=True):
             normalized = (code or "").strip().upper()
             if normalized in VALID_CODES:
